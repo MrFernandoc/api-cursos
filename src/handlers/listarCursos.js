@@ -1,50 +1,49 @@
 const AWS = require('aws-sdk');
-const { verificarToken } = require('../middlewares/authMiddleware');
+const { validarTokenExternamente } = require('../middlewares/authMiddleware');
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 const TABLE_NAME = process.env.TABLE_NAME;
 
 module.exports.handler = async (event) => {
   try {
-    const payload = verificarToken(event);
+    const token = event.headers.Authorization;
+    const payload = await validarTokenExternamente(token);
     const tenant_id = payload.tenant_id;
 
     const queryParams = event.queryStringParameters || {};
     const limit = parseInt(queryParams.limit) || 10;
+    const lastKey = queryParams.lastKey ? JSON.parse(decodeURIComponent(queryParams.lastKey)) : null;
 
-    let params = {
+    const params = {
       TableName: TABLE_NAME,
-      KeyConditionExpression: 'tenant_id = :tid',
+      KeyConditionExpression: 'tenant_id = :tenant',
       ExpressionAttributeValues: {
-        ':tid': tenant_id,
+        ':tenant': tenant_id
       },
-      Limit: limit,
+      Limit: limit
     };
 
-    if (queryParams.lastKey) {
-      // Suponemos que el lastKey es el curso_id del último curso
-      params.ExclusiveStartKey = {
-        tenant_id,
-        curso_id: queryParams.lastKey,
-      };
+    if (lastKey) {
+      params.ExclusiveStartKey = lastKey;
     }
 
-    const data = await dynamodb.query(params).promise();
+    const resultado = await dynamodb.query(params).promise();
 
     return {
       statusCode: 200,
       body: JSON.stringify({
-        message: 'Cursos encontrados',
-        cursos: data.Items,
-        nextPageToken: data.LastEvaluatedKey ? data.LastEvaluatedKey.curso_id : null,
-      }),
+        cursos: resultado.Items,
+        lastEvaluatedKey: resultado.LastEvaluatedKey
+          ? encodeURIComponent(JSON.stringify(resultado.LastEvaluatedKey))
+          : null
+      })
     };
-  } catch (err) {
+
+  } catch (error) {
+    console.error('Error al listar cursos:', error.message);
     return {
-      statusCode: err.statusCode || 500,
-      body: JSON.stringify({
-        message: err.message || 'Error al listar cursos',
-      }),
+      statusCode: 500,
+      body: JSON.stringify({ mensaje: error.message })
     };
   }
 };

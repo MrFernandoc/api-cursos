@@ -1,59 +1,58 @@
 const AWS = require('aws-sdk');
-const { verificarToken } = require('../middlewares/authMiddleware');
+const { validarTokenExternamente } = require('../middlewares/authMiddleware');
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 const TABLE_NAME = process.env.TABLE_NAME;
 
 module.exports.handler = async (event) => {
   try {
-    const payload = verificarToken(event);
+    const token = event.headers.Authorization;
+    const payload = await validarTokenExternamente(token);
     const tenant_id = payload.tenant_id;
 
-    const curso_id = event.pathParameters?.curso_id;
-    const body = JSON.parse(event.body);
-    const curso_datos = body.curso_datos;
+    const curso_id = event.pathParameters.curso_id;
+    const nuevos_datos = JSON.parse(event.body);
 
-    if (!curso_id || !curso_datos || typeof curso_datos !== 'object') {
+    // Verificar que exista el curso
+    const resultado = await dynamodb.get({
+      TableName: TABLE_NAME,
+      Key: { tenant_id, curso_id }
+    }).promise();
+
+    if (!resultado.Item) {
       return {
-        statusCode: 400,
-        body: JSON.stringify({ message: 'curso_id y curso_datos son requeridos' }),
+        statusCode: 404,
+        body: JSON.stringify({ mensaje: 'Curso no encontrado' })
       };
     }
 
-    const params = {
-      TableName: TABLE_NAME,
-      Key: {
-        tenant_id,
-        curso_id,
-      },
-      UpdateExpression: 'set curso_datos = :datos',
-      ExpressionAttributeValues: {
-        ':datos': curso_datos,
-      },
-      ConditionExpression: 'attribute_exists(tenant_id) AND attribute_exists(curso_id)',
-      ReturnValues: 'ALL_NEW',
+    const cursoExistente = resultado.Item;
+
+    // Actualizar solo los campos enviados en el body
+    const curso_datos_actualizados = {
+      ...cursoExistente.curso_datos,
+      ...nuevos_datos
     };
 
-    const result = await dynamodb.update(params).promise();
+    await dynamodb.put({
+      TableName: TABLE_NAME,
+      Item: {
+        tenant_id,
+        curso_id,
+        curso_datos: curso_datos_actualizados
+      }
+    }).promise();
 
     return {
       statusCode: 200,
-      body: JSON.stringify({
-        message: 'Curso modificado correctamente',
-        curso: result.Attributes,
-      }),
+      body: JSON.stringify({ mensaje: 'Curso modificado exitosamente' })
     };
-  } catch (err) {
-    if (err.code === 'ConditionalCheckFailedException') {
-      return {
-        statusCode: 404,
-        body: JSON.stringify({ message: 'El curso no existe' }),
-      };
-    }
 
+  } catch (error) {
+    console.error('Error al modificar curso:', error.message);
     return {
-      statusCode: err.statusCode || 500,
-      body: JSON.stringify({ message: err.message || 'Error al modificar el curso' }),
+      statusCode: 500,
+      body: JSON.stringify({ mensaje: error.message })
     };
   }
 };

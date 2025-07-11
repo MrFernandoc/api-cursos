@@ -1,53 +1,39 @@
 const AWS = require('aws-sdk');
-const { verificarToken } = require('../middlewares/authMiddleware');
+const { validarTokenExternamente } = require('../middlewares/authMiddleware');
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 const TABLE_NAME = process.env.TABLE_NAME;
 
 module.exports.handler = async (event) => {
   try {
-    const payload = verificarToken(event);
+    const token = event.headers.Authorization;
+    const payload = await validarTokenExternamente(token);
     const tenant_id = payload.tenant_id;
 
-    const curso_id = event.pathParameters?.curso_id;
+    const { curso_id } = event.pathParameters;
 
-    if (!curso_id) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ message: 'curso_id es requerido en la URL' }),
-      };
-    }
-
-    const params = {
+    const resultado = await dynamodb.get({
       TableName: TABLE_NAME,
-      Key: {
-        tenant_id,
-        curso_id,
-      },
-    };
+      Key: { tenant_id, curso_id }
+    }).promise();
 
-    const result = await dynamodb.get(params).promise();
-
-    if (!result.Item) {
+    if (!resultado.Item) {
       return {
         statusCode: 404,
-        body: JSON.stringify({ message: 'Curso no encontrado' }),
+        body: JSON.stringify({ mensaje: 'Curso no encontrado' })
       };
     }
 
     return {
       statusCode: 200,
-      body: JSON.stringify({
-        message: 'Curso encontrado',
-        curso: result.Item,
-      }),
+      body: JSON.stringify({ curso: resultado.Item })
     };
-  } catch (err) {
+
+  } catch (error) {
+    console.error('Error al buscar curso:', error.message);
     return {
-      statusCode: err.statusCode || 500,
-      body: JSON.stringify({
-        message: err.message || 'Error al buscar curso',
-      }),
+      statusCode: 500,
+      body: JSON.stringify({ mensaje: error.message })
     };
   }
 };

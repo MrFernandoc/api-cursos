@@ -12,7 +12,7 @@ provider:
 
   environment:
     TABLE_NAME: ${sls:stage}-t_cursos
-    JWT_SECRET: 'secretoseguro'
+    JWT_SECRET: supersecreto123
 
 functions:
   crearCurso:

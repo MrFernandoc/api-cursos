@@ -14,8 +14,11 @@ async function validarTokenExternamente(token) {
       }
     });
 
-    if (response.status === 200 && response.data.payload) {
-      return response.data.payload; // Contiene tenant_id y username
+    // 👇 Interpretamos el string del body como JSON real
+    const parsedBody = JSON.parse(response.data.body);
+
+    if (response.status === 200 && parsedBody.payload) {
+      return parsedBody.payload;
     } else {
       throw new Error('Token inválido');
     }

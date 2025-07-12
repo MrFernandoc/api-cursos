@@ -13,16 +13,18 @@ module.exports.handler = async (event) => {
 
     const body = JSON.parse(event.body);
 
-    const curso_id = uuidv4(); // ID único para el curso
+    if (!body.curso_datos || !body.curso_datos.nombre) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ mensaje: 'El campo nombre es obligatorio' })
+      };
+    }
+
+    const curso_id = uuidv4();
 
     const curso_datos = {
-      titulo: body.titulo,
-      descripcion: body.descripcion,
-      precio: body.precio,
-      categoria: body.categoria,
-      duracion_horas: body.duracion_horas,
-      instructor: body.instructor
-      // puedes agregar más campos si deseas
+      nombre: body.curso_datos.nombre,
+      ...body.curso_datos // incluye cualquier otro campo adicional
     };
 
     const item = {

@@ -54,6 +54,14 @@ functions:
           method: delete
           cors: true
 
+  poblarCursos:
+    handler: src/handlers/poblarCursos.poblarCursos
+    events:
+      - http:
+          path: cursos/poblar
+          method: post
+          cors: true
+
 resources:
   Resources:
     TablaCursos:

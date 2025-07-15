@@ -20,7 +20,15 @@ functions:
       - http:
           path: cursos/crear
           method: post
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
 
   listarCursos:
     handler: src/handlers/listarCursos.handler
@@ -28,7 +36,15 @@ functions:
       - http:
           path: cursos/listar
           method: get
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
 
   buscarCurso:
     handler: src/handlers/buscarCurso.handler
@@ -36,7 +52,15 @@ functions:
       - http:
           path: cursos/buscar/{curso_id}
           method: get
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
 
   modificarCurso:
     handler: src/handlers/modificarCurso.handler
@@ -44,7 +68,15 @@ functions:
       - http:
           path: cursos/modificar/{curso_id}
           method: put
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
 
   eliminarCurso:
     handler: src/handlers/eliminarCurso.handler
@@ -52,7 +84,15 @@ functions:
       - http:
           path: cursos/eliminar/{curso_id}
           method: delete
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
 
   poblarCursos:
     handler: src/handlers/poblarCursos.poblarCursos
@@ -60,7 +100,15 @@ functions:
       - http:
           path: cursos/poblar
           method: post
-          cors: true
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+            allowCredentials: false
 
 resources:
   Resources:
@@ -79,3 +127,5 @@ resources:
           - AttributeName: curso_id
             KeyType: RANGE
         BillingMode: PAY_PER_REQUEST
+        StreamSpecification:
+          StreamViewType: NEW_AND_OLD_IMAGES

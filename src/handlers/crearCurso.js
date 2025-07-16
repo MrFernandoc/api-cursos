@@ -21,17 +21,18 @@ module.exports.handler = async (event) => {
     }
 
     const curso_id = uuidv4();
+    const fecha_creacion = new Date().toISOString();
 
     const curso_datos = {
       nombre: body.curso_datos.nombre,
-      ...body.curso_datos,
-      fecha_creacion: new Date().toISOString()
+      ...body.curso_datos
     };
 
     const item = {
       tenant_id,
       curso_id,
-      curso_datos
+      curso_datos,
+      fecha_creacion
     };
 
     await dynamodb.put({

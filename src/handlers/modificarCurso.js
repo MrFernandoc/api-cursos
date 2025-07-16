@@ -13,7 +13,7 @@ module.exports.handler = async (event) => {
     const curso_id = event.pathParameters.curso_id;
     const nuevos_datos = JSON.parse(event.body);
 
-    // Verificar que exista el curso
+    // Verificar que el curso exista
     const resultado = await dynamodb.get({
       TableName: TABLE_NAME,
       Key: { tenant_id, curso_id }
@@ -28,19 +28,23 @@ module.exports.handler = async (event) => {
 
     const cursoExistente = resultado.Item;
 
-    // Actualizar solo los campos enviados en el body
+    // Actualizar datos incluyendo fecha_modificacion
     const curso_datos_actualizados = {
       ...cursoExistente.curso_datos,
-      ...nuevos_datos
+      ...nuevos_datos,
+      fecha_modificacion: new Date().toISOString() 
+    };
+
+    const item_actualizado = {
+      tenant_id,
+      curso_id,
+      curso_datos: curso_datos_actualizados,
+      fecha_creacion: cursoExistente.fecha_creacion //
     };
 
     await dynamodb.put({
       TableName: TABLE_NAME,
-      Item: {
-        tenant_id,
-        curso_id,
-        curso_datos: curso_datos_actualizados
-      }
+      Item: item_actualizado
     }).promise();
 
     return {

@@ -12,13 +12,6 @@ provider:
 
   environment:
     TABLE_NAME: ${sls:stage}-t_cursos
-    ELASTICSEARCH_HOST: http://172.31.95.63:9200
-
-  vpc:
-    securityGroupId:
-      - sg-055586911347b7f04
-    subnetIds:
-      - subnet-02f720d15e55ccda2
 
 functions:
   crearCurso:
@@ -28,6 +21,7 @@ functions:
           path: cursos/crear
           method: post
           cors: true
+
   listarCursos:
     handler: src/handlers/listarCursos.handler
     events:
@@ -35,6 +29,7 @@ functions:
           path: cursos/listar
           method: get
           cors: true
+
   buscarCurso:
     handler: src/handlers/buscarCurso.handler
     events:
@@ -42,6 +37,7 @@ functions:
           path: cursos/buscar/{curso_id}
           method: get
           cors: true
+
   modificarCurso:
     handler: src/handlers/modificarCurso.handler
     events:
@@ -49,6 +45,7 @@ functions:
           path: cursos/modificar/{curso_id}
           method: put
           cors: true
+
   eliminarCurso:
     handler: src/handlers/eliminarCurso.handler
     events:
@@ -56,6 +53,7 @@ functions:
           path: cursos/eliminar/{curso_id}
           method: delete
           cors: true
+
   poblarCursos:
     handler: src/handlers/poblarCursos.poblarCursos
     events:
@@ -63,20 +61,6 @@ functions:
           path: cursos/poblar
           method: post
           cors: true
-          
-  actualizarProductos:
-    handler: src/handlers/actualizarProductos.handler
-    description: "Captura cambios de DynamoDB y los sincroniza con Elasticsearch"
-    events:
-      - stream:
-          type: dynamodb
-          arn:
-            Fn::GetAtt:
-              - TablaCursos
-              - StreamArn
-          batchSize: 10
-          startingPosition: LATEST
-          enabled: true
 
 resources:
   Resources:

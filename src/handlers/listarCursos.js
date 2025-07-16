@@ -1,5 +1,6 @@
 const AWS = require('aws-sdk');
 const { validarTokenExternamente } = require('../middlewares/authMiddleware');
+const { createResponse } = require('../utils/response');
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();
 const TABLE_NAME = process.env.TABLE_NAME;
@@ -31,21 +32,20 @@ module.exports.handler = async (event) => {
 
     const resultado = await dynamodb.query(params).promise();
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        cursos: resultado.Items,
-        lastEvaluatedKey: resultado.LastEvaluatedKey
-          ? encodeURIComponent(JSON.stringify(resultado.LastEvaluatedKey))
-          : null
-      })
-    };
+    return createResponse(200, {
+      cursos: resultado.Items,
+      lastEvaluatedKey: resultado.LastEvaluatedKey
+        ? encodeURIComponent(JSON.stringify(resultado.LastEvaluatedKey))
+        : null
+    });
 
   } catch (error) {
     console.error('Error al listar cursos:', error.message);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ mensaje: error.message })
-    };
+    
+    if (error.message.includes('Token')) {
+      return createResponse(401, { mensaje: error.message });
+    }
+
+    return createResponse(500, { mensaje: 'Error interno al procesar la solicitud.' });
   }
 };

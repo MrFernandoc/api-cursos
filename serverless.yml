@@ -13,6 +13,17 @@ provider:
   environment:
     TABLE_NAME: ${sls:stage}-t_cursos
 
+  http:
+    cors:
+      origin: '*'
+      headers:
+        - Content-Type
+        - X-Amz-Date
+        - Authorization
+        - X-Api-Key
+        - X-Amz-Security-Token
+      allowCredentials: false
+
 functions:
   crearCurso:
     handler: src/handlers/crearCurso.handler
@@ -20,15 +31,6 @@ functions:
       - http:
           path: cursos/crear
           method: post
-          cors:
-            origin: '*'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-            allowCredentials: false
 
   listarCursos:
     handler: src/handlers/listarCursos.handler
@@ -36,15 +38,6 @@ functions:
       - http:
           path: cursos/listar
           method: get
-          cors:
-            origin: '*'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-            allowCredentials: false
 
   buscarCurso:
     handler: src/handlers/buscarCurso.handler
@@ -52,15 +45,6 @@ functions:
       - http:
           path: cursos/buscar/{curso_id}
           method: get
-          cors:
-            origin: '*'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-            allowCredentials: false
 
   modificarCurso:
     handler: src/handlers/modificarCurso.handler
@@ -68,15 +52,6 @@ functions:
       - http:
           path: cursos/modificar/{curso_id}
           method: put
-          cors:
-            origin: '*'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-            allowCredentials: false
 
   eliminarCurso:
     handler: src/handlers/eliminarCurso.handler
@@ -84,15 +59,6 @@ functions:
       - http:
           path: cursos/eliminar/{curso_id}
           method: delete
-          cors:
-            origin: '*'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-            allowCredentials: false
 
   poblarCursos:
     handler: src/handlers/poblarCursos.poblarCursos
@@ -100,15 +66,6 @@ functions:
       - http:
           path: cursos/poblar
           method: post
-          cors:
-            origin: '*'
-            headers:
-              - Content-Type
-              - X-Amz-Date
-              - Authorization
-              - X-Api-Key
-              - X-Amz-Security-Token
-            allowCredentials: false
 
 resources:
   Resources:

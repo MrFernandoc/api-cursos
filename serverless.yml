@@ -62,6 +62,19 @@ functions:
           method: post
           cors: true
 
+  # 🔥 NUEVA FUNCIÓN: Lambda Stream Processor para ingesta en tiempo real
+  actualizarCursosElasticsearch:
+    handler: src/handlers/streamProcessor.handler
+    events:
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt: [TablaCursos, StreamArn]
+          batchSize: 10
+          startingPosition: LATEST
+    environment:
+      ELASTICSEARCH_ENDPOINT: http://35.172.134.128:9200
+
 resources:
   Resources:
     TablaCursos:

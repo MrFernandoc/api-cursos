@@ -1,0 +1,604 @@
+openapi: 3.0.0
+info:
+  title: API de Cursos Virtuales - CS2032
+  description: |
+    API Serverless Multi-tenant para gestión de cursos virtuales desarrollada como parte del Proyecto Final del curso CS2032 - Cloud Computing (Ciclo 2025-1).
+    
+    **Proyecto:** Cursos Virtuales (Tipo 5 - Referencia: Udemy)
+    **Arquitectura:** Serverless Multi-tenant con AWS Lambda, API Gateway y DynamoDB
+    **Framework:** Serverless Framework con Node.js 18.x
+    
+    **Características Técnicas:**
+    - ✅ Multi-tenancy basado en tokens JWT
+    - ✅ Operaciones CRUD completas para cursos
+    - ✅ Paginación optimizada con DynamoDB GSI
+    - ✅ Autenticación mediante API externa de usuarios
+    - ✅ Manejo de errores y validaciones robustas
+    - ✅ Poblado automático de datos de prueba
+    - ✅ Documentación completa con OpenAPI 3.0
+    
+    **Seguridad:**
+    Todas las operaciones requieren un token JWT válido en el header `Authorization`.
+    El token debe ser obtenido previamente desde la API de usuarios externa.
+    
+    **Despliegue:**
+    - Desplegado en AWS usando Serverless Framework
+    - Soporte para múltiples stages (dev, test, prod)
+    - Infraestructura como código (IaC)
+  version: 1.0.0
+  contact:
+    name: Fernando Aguilar
+    email: segundo.aguilar@utec.edu.pe
+    url: https://github.com/MrFernandoc/api-cursos
+  license:
+    name: Proyecto Académico - UTEC
+    url: https://github.com/MrFernandoc/api-cursos/blob/main/LICENSE
+  x-curso:
+    materia: CS2032 - Cloud Computing
+    ciclo: 2025-1
+    universidad: Universidad de Ingeniería y Tecnología (UTEC)
+    tipo-proyecto: Cursos Virtuales
+
+servers:
+  - url: https://r9ttk3it54.execute-api.us-east-1.amazonaws.com/dev
+    description: Servidor de desarrollo (AWS Lambda)
+  - url: https://r9ttk3it54.execute-api.us-east-1.amazonaws.com/test
+    description: Servidor de pruebas (AWS Lambda)
+  - url: https://r9ttk3it54.execute-api.us-east-1.amazonaws.com/prod
+    description: Servidor de producción (AWS Lambda)
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token JWT obtenido desde la API de usuarios
+
+  schemas:
+    CursoDatos:
+      type: object
+      required:
+        - nombre
+      properties:
+        nombre:
+          type: string
+          description: Nombre del curso
+          example: "Introducción a JavaScript"
+        descripcion:
+          type: string
+          description: Descripción detallada del curso
+          example: "Curso básico de JavaScript para principiantes"
+        nivel:
+          type: string
+          enum: [Básico, Intermedio, Avanzado]
+          description: Nivel de dificultad del curso
+          example: "Básico"
+        duracion_horas:
+          type: number
+          description: Duración del curso en horas
+          example: 40
+        precio:
+          type: number
+          format: float
+          description: Precio del curso en dólares
+          example: 99.99
+        publicado:
+          type: boolean
+          description: Estado de publicación del curso
+          example: true
+        etiquetas:
+          type: array
+          items:
+            type: string
+          description: Etiquetas del curso
+          example: ["javascript", "programación", "web"]
+        instructor:
+          type: string
+          description: Nombre del instructor
+          example: "Juan Pérez"
+        fecha_modificacion:
+          type: string
+          format: date-time
+          description: Fecha de última modificación (añadida automáticamente)
+          example: "2025-07-16T10:30:00Z"
+
+    Curso:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+          description: Identificador del tenant
+          example: "tenant_123"
+        curso_id:
+          type: string
+          description: Identificador único del curso (UUID)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        curso_datos:
+          $ref: '#/components/schemas/CursoDatos'
+        fecha_creacion:
+          type: string
+          format: date-time
+          description: Fecha de creación del curso
+          example: "2025-07-16T10:00:00Z"
+
+    CrearCursoRequest:
+      type: object
+      required:
+        - curso_datos
+      properties:
+        curso_datos:
+          $ref: '#/components/schemas/CursoDatos'
+
+    CrearCursoResponse:
+      type: object
+      properties:
+        mensaje:
+          type: string
+          example: "Curso creado exitosamente"
+        curso_id:
+          type: string
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    ListarCursosResponse:
+      type: object
+      properties:
+        cursos:
+          type: array
+          items:
+            $ref: '#/components/schemas/Curso'
+        lastEvaluatedKey:
+          type: string
+          nullable: true
+          description: Clave para paginación (URL encoded)
+          example: "eyJ0ZW5hbnRfaWQiOiJ0ZW5hbnRfMTIzIiwiY3Vyc29faWQiOiIxMjMifQ%3D%3D"
+
+    BuscarCursoResponse:
+      type: object
+      properties:
+        curso:
+          $ref: '#/components/schemas/Curso'
+
+    PoblarCursosRequest:
+      type: object
+      properties:
+        cantidad:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Cantidad de cursos a generar
+          example: 10
+
+    PoblarCursosResponse:
+      type: object
+      properties:
+        mensaje:
+          type: string
+          example: "Proceso completado. Se insertaron cursos desde 'Programación 1' hasta 'Programación 10'."
+
+    ErrorResponse:
+      type: object
+      properties:
+        mensaje:
+          type: string
+          description: Mensaje de error
+          example: "Error interno al procesar la solicitud"
+
+    ValidationErrorResponse:
+      type: object
+      properties:
+        mensaje:
+          type: string
+          description: Mensaje de error de validación
+          example: "La propiedad 'curso_datos' y su campo 'nombre' son obligatorios."
+
+  responses:
+    UnauthorizedError:
+      description: Token de autenticación inválido o faltante
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            mensaje: "Token inválido o expirado"
+
+    NotFoundError:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            mensaje: "Curso no encontrado"
+
+    ValidationError:
+      description: Error de validación en los datos enviados
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+
+    InternalServerError:
+      description: Error interno del servidor
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            mensaje: "Error interno al procesar la solicitud"
+
+paths:
+  /cursos/crear:
+    post:
+      summary: Crear un nuevo curso
+      description: |
+        Crea un nuevo curso en el sistema. Requiere autenticación con token JWT.
+        
+        **Validaciones:**
+        - El campo `curso_datos` es obligatorio
+        - El campo `nombre` dentro de `curso_datos` es obligatorio
+        
+        **Comportamiento:**
+        - Se genera automáticamente un `curso_id` único (UUID)
+        - Se registra la `fecha_creacion` actual
+        - El `tenant_id` se obtiene del token JWT
+      tags:
+        - Cursos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CrearCursoRequest'
+            examples:
+              curso_basico:
+                summary: Curso de Desarrollo Web
+                value:
+                  curso_datos:
+                    nombre: "Desarrollo Web Full Stack"
+                    descripcion: "Curso completo de desarrollo web con tecnologías modernas"
+                    nivel: "Intermedio"
+                    duracion_horas: 120
+                    precio: 299.99
+                    publicado: true
+                    etiquetas: ["web", "fullstack", "javascript", "react", "node"]
+                    instructor: "Ana García López"
+              curso_avanzado:
+                summary: Curso de Ciencia de Datos
+                value:
+                  curso_datos:
+                    nombre: "Machine Learning y Data Science"
+                    descripcion: "Técnicas avanzadas de análisis de datos y aprendizaje automático"
+                    nivel: "Avanzado"
+                    duracion_horas: 80
+                    precio: 449.99
+                    publicado: true
+                    etiquetas: ["machine learning", "python", "data science", "AI"]
+                    instructor: "Dr. Roberto Silva"
+      responses:
+        '201':
+          description: Curso creado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrearCursoResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /cursos/listar:
+    get:
+      summary: Listar cursos con paginación
+      description: |
+        Obtiene una lista paginada de cursos ordenados por fecha de creación (más recientes primero).
+        
+        **Características:**
+        - Paginación mediante `limit` y `lastKey`
+        - Ordenado por fecha de creación descendente
+        - Filtrado automático por `tenant_id` del token
+        - Utiliza índice secundario global para optimizar consultas
+      tags:
+        - Cursos
+      parameters:
+        - name: limit
+          in: query
+          description: Número máximo de cursos a retornar
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          example: 20
+        - name: lastKey
+          in: query
+          description: Clave de paginación (URL encoded) obtenida de la respuesta anterior
+          required: false
+          schema:
+            type: string
+          example: "eyJ0ZW5hbnRfaWQiOiJ0ZW5hbnRfMTIzIiwiY3Vyc29faWQiOiIxMjMifQ%3D%3D"
+      responses:
+        '200':
+          description: Lista de cursos obtenida exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListarCursosResponse'
+              examples:
+                con_paginacion:
+                  summary: Respuesta con más páginas disponibles
+                  value:
+                    cursos:
+                      - tenant_id: "utec_tenant_001"
+                        curso_id: "550e8400-e29b-41d4-a716-446655440000"
+                        curso_datos:
+                          nombre: "JavaScript Moderno ES2024"
+                          descripcion: "Curso actualizado con las últimas características de JavaScript"
+                          nivel: "Intermedio"
+                          duracion_horas: 45
+                          precio: 199.99
+                          publicado: true
+                          etiquetas: ["javascript", "es2024", "web", "frontend"]
+                          instructor: "María Fernández"
+                        fecha_creacion: "2025-07-16T10:00:00Z"
+                    lastEvaluatedKey: "eyJ0ZW5hbnRfaWQiOiJ0ZW5hbnRfMTIzIn0%3D"
+                sin_paginacion:
+                  summary: Última página (sin más resultados)
+                  value:
+                    cursos:
+                      - tenant_id: "utec_tenant_001"
+                        curso_id: "550e8400-e29b-41d4-a716-446655440001"
+                        curso_datos:
+                          nombre: "React.js Profesional"
+                          descripcion: "Desarrollo de aplicaciones web profesionales con React"
+                          nivel: "Avanzado"
+                          duracion_horas: 60
+                          precio: 349.99
+                          publicado: true
+                          etiquetas: ["react", "javascript", "frontend", "hooks"]
+                          instructor: "Carlos Mendoza"
+                        fecha_creacion: "2025-07-15T14:30:00Z"
+                    lastEvaluatedKey: null
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /cursos/buscar/{curso_id}:
+    get:
+      summary: Buscar curso por ID
+      description: |
+        Obtiene los detalles de un curso específico mediante su ID.
+        
+        **Búsqueda:**
+        - Búsqueda exacta por `curso_id` y `tenant_id`
+        - Retorna todos los datos del curso si existe
+        - Error 404 si el curso no existe o no pertenece al tenant
+      tags:
+        - Cursos
+      parameters:
+        - name: curso_id
+          in: path
+          description: Identificador único del curso (UUID)
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Curso encontrado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuscarCursoResponse'
+              example:
+                curso:
+                  tenant_id: "utec_tenant_001"
+                  curso_id: "550e8400-e29b-41d4-a716-446655440000"
+                  curso_datos:
+                    nombre: "Vue.js 3 Composition API"
+                    descripcion: "Curso completo de Vue.js 3 con Composition API y TypeScript"
+                    nivel: "Avanzado"
+                    duracion_horas: 75
+                    precio: 279.99
+                    publicado: true
+                    etiquetas: ["vue", "typescript", "composition-api", "spa"]
+                    instructor: "Laura Rodríguez"
+                  fecha_creacion: "2025-07-16T08:15:00Z"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /cursos/modificar/{curso_id}:
+    put:
+      summary: Modificar un curso existente
+      description: |
+        Actualiza los datos de un curso existente. Permite actualizaciones parciales.
+        
+        **Comportamiento:**
+        - Fusiona los nuevos datos con los existentes
+        - Mantiene la `fecha_creacion` original
+        - Añade automáticamente `fecha_modificacion`
+        - Solo actualiza los campos enviados en el request
+        - Verifica que el curso exista y pertenezca al tenant
+      tags:
+        - Cursos
+      parameters:
+        - name: curso_id
+          in: path
+          description: Identificador único del curso a modificar
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      requestBody:
+        required: true
+        description: Datos a actualizar (actualización parcial permitida)
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nombre:
+                  type: string
+                  example: "JavaScript Avanzado - Actualizado"
+                descripcion:
+                  type: string
+                  example: "Curso actualizado con nuevos contenidos"
+                precio:
+                  type: number
+                  example: 149.99
+                publicado:
+                  type: boolean
+                  example: false
+            examples:
+              actualizacion_parcial:
+                summary: Actualización de precio y disponibilidad
+                value:
+                  precio: 199.99
+                  publicado: true
+              actualizacion_completa:
+                summary: Actualización completa del curso
+                value:
+                  nombre: "Node.js & Express.js Profesional"
+                  descripcion: "Desarrollo backend profesional con Node.js, Express y MongoDB"
+                  nivel: "Avanzado"
+                  duracion_horas: 90
+                  precio: 389.99
+                  publicado: true
+                  etiquetas: ["nodejs", "express", "mongodb", "backend", "api"]
+                  instructor: "Diego Fernández"
+      responses:
+        '200':
+          description: Curso modificado exitosamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mensaje:
+                    type: string
+                    example: "Curso modificado exitosamente"
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /cursos/eliminar/{curso_id}:
+    delete:
+      summary: Eliminar un curso
+      description: |
+        Elimina permanentemente un curso del sistema.
+        
+        **Proceso:**
+        - Verifica que el curso exista y pertenezca al tenant
+        - Elimina el curso de la base de datos
+        - Esta operación es irreversible
+      tags:
+        - Cursos
+      parameters:
+        - name: curso_id
+          in: path
+          description: Identificador único del curso a eliminar
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Curso eliminado exitosamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mensaje:
+                    type: string
+                    example: "Curso eliminado correctamente"
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /cursos/poblar:
+    post:
+      summary: Poblar cursos de prueba
+      description: |
+        Genera automáticamente cursos de prueba con datos realistas.
+        
+        **Funcionalidad:**
+        - Genera cursos secuenciales de programación ("Programación 1", "Programación 2", etc.)
+        - Determina automáticamente el siguiente número basado en cursos existentes
+        - Crea cursos con datos variados (nivel, precio, duración)
+        - Útil para testing y demostración
+        
+        **Datos generados automáticamente:**
+        - Nombres secuenciales: "Programación 1", "Programación 2", etc.
+        - Niveles progresivos: Básico (1-10) → Intermedio (11-20) → Avanzado (21+)
+        - Precios escalables: Base $49.99 + ($5 × número del curso)
+        - Duraciones variables: Base 20h + (2h × número del curso)
+        - Instructor predeterminado: "Ana Coder"
+        - Etiquetas estándar: ["programación", "desarrollo", nivel]
+      tags:
+        - Utilidades
+      requestBody:
+        required: false
+        description: Parámetros opcionales para el poblado
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PoblarCursosRequest'
+            examples:
+              default:
+                summary: Cantidad por defecto (10 cursos)
+                value: {}
+              custom:
+                summary: Cantidad personalizada
+                value:
+                  cantidad: 25
+      responses:
+        '200':
+          description: Cursos poblados exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PoblarCursosResponse'
+              examples:
+                success:
+                  summary: Poblado exitoso
+                  value:
+                    mensaje: "Proceso completado. Se insertaron cursos desde 'Programación 21' hasta 'Programación 30'."
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+tags:
+  - name: Cursos
+    description: Operaciones CRUD para gestión de cursos virtuales
+  - name: Utilidades
+    description: Funciones auxiliares y de testing
+
+externalDocs:
+  description: Repositorio del Proyecto en GitHub
+  url: https://github.com/MrFernandoc/api-cursos

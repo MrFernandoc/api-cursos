@@ -5,24 +5,13 @@ provider:
   name: aws
   runtime: nodejs18.x
   memorySize: 1024
-  timeout: 30
+  timeout: 29
 
   iam:
     role: arn:aws:iam::974671687457:role/LabRole
 
   environment:
     TABLE_NAME: ${sls:stage}-t_cursos
-
-  http:
-    cors:
-      origin: '*'
-      headers:
-        - Content-Type
-        - X-Amz-Date
-        - Authorization
-        - X-Api-Key
-        - X-Amz-Security-Token
-      allowCredentials: false
 
 functions:
   crearCurso:
@@ -31,6 +20,7 @@ functions:
       - http:
           path: cursos/crear
           method: post
+          cors: true
 
   listarCursos:
     handler: src/handlers/listarCursos.handler
@@ -38,6 +28,7 @@ functions:
       - http:
           path: cursos/listar
           method: get
+          cors: true
 
   buscarCurso:
     handler: src/handlers/buscarCurso.handler
@@ -45,6 +36,7 @@ functions:
       - http:
           path: cursos/buscar/{curso_id}
           method: get
+          cors: true
 
   modificarCurso:
     handler: src/handlers/modificarCurso.handler
@@ -52,6 +44,7 @@ functions:
       - http:
           path: cursos/modificar/{curso_id}
           method: put
+          cors: true
 
   eliminarCurso:
     handler: src/handlers/eliminarCurso.handler
@@ -59,6 +52,7 @@ functions:
       - http:
           path: cursos/eliminar/{curso_id}
           method: delete
+          cors: true
 
   poblarCursos:
     handler: src/handlers/poblarCursos.poblarCursos
@@ -66,6 +60,7 @@ functions:
       - http:
           path: cursos/poblar
           method: post
+          cors: true
 
 resources:
   Resources:

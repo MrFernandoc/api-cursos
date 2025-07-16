@@ -24,7 +24,8 @@ module.exports.handler = async (event) => {
 
     const curso_datos = {
       nombre: body.curso_datos.nombre,
-      ...body.curso_datos // incluye cualquier otro campo adicional
+      ...body.curso_datos,
+      fecha_creacion: new Date().toISOString()
     };
 
     const item = {

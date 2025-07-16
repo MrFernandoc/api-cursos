@@ -121,6 +121,8 @@ resources:
             AttributeType: S
           - AttributeName: curso_id
             AttributeType: S
+          - AttributeName: fecha_creacion
+            AttributeType: S
         KeySchema:
           - AttributeName: tenant_id
             KeyType: HASH
@@ -129,3 +131,12 @@ resources:
         BillingMode: PAY_PER_REQUEST
         StreamSpecification:
           StreamViewType: NEW_AND_OLD_IMAGES
+        GlobalSecondaryIndexes:
+          - IndexName: CursosPorFechaIndex
+            KeySchema:
+              - AttributeName: tenant_id
+                KeyType: HASH
+              - AttributeName: fecha_creacion
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL

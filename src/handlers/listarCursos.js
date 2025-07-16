@@ -16,11 +16,13 @@ module.exports.handler = async (event) => {
 
     const params = {
       TableName: TABLE_NAME,
+      IndexName: 'CursosPorFechaIndex',
       KeyConditionExpression: 'tenant_id = :tenant',
       ExpressionAttributeValues: {
         ':tenant': tenant_id
       },
-      Limit: limit
+      Limit: limit,
+      ScanIndexForward: false
     };
 
     if (lastKey) {

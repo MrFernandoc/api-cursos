@@ -1,6 +1,6 @@
 openapi: 3.0.0
 info:
-  title: API de Cursos Virtuales - CS2032
+  title: API Cursos - EduCloud
   description: |
     API Serverless Multi-tenant para gestión de cursos virtuales desarrollada como parte del Proyecto Final del curso CS2032 - Cloud Computing (Ciclo 2025-1).
     
@@ -19,7 +19,8 @@ info:
     
     **Seguridad:**
     Todas las operaciones requieren un token JWT válido en el header `Authorization`.
-    El token debe ser obtenido previamente desde la API de usuarios externa.
+    El token debe ser obtenido previamente desde la API de usuarios externa:
+    `https://c0fmkco8rb.execute-api.us-east-1.amazonaws.com/dev`
     
     **Despliegue:**
     - Desplegado en AWS usando Serverless Framework
@@ -29,7 +30,7 @@ info:
   contact:
     name: Fernando Aguilar
     email: segundo.aguilar@utec.edu.pe
-    url: https://github.com/MrFernandoc/api-cursos
+    url: https://github.com/MrFernandoc
   license:
     name: Proyecto Académico - UTEC
     url: https://github.com/MrFernandoc/api-cursos/blob/main/LICENSE
@@ -40,6 +41,9 @@ info:
     tipo-proyecto: Cursos Virtuales
 
 servers:
+  # Added by API Auto Mocking Plugin
+  - description: SwaggerHub API Auto Mocking
+    url: https://virtserver.swaggerhub.com/utec-e9b/api-cursos/1.0.0
   - url: https://r9ttk3it54.execute-api.us-east-1.amazonaws.com/dev
     description: Servidor de desarrollo (AWS Lambda)
   - url: https://r9ttk3it54.execute-api.us-east-1.amazonaws.com/test
@@ -53,10 +57,13 @@ security:
 components:
   securitySchemes:
     bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Token JWT obtenido desde la API de usuarios
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        Token JWT obtenido desde la API de usuarios externa.
+        
+        **API de usuarios:** https://c0fmkco8rb.execute-api.us-east-1.amazonaws.com/dev
 
   schemas:
     CursoDatos:

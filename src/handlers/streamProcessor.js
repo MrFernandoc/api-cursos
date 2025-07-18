@@ -1,6 +1,5 @@
 const AWS = require('aws-sdk');
 const axios = require('axios');
-// 🚀 OPTIMIZACIÓN: Usar AWS SDK Utilities para conversión ultrarrápida
 const { unmarshall } = require('@aws-sdk/util-dynamodb');
 
 // Configuración de Elasticsearch
@@ -27,20 +26,56 @@ const TENANT_PORTS = {
 // Lista de tenants permitidos
 const ALLOWED_TENANTS = ['UTEC', 'MIT'];
 
-// Obtener stage actual (dev, test, prod)
-const CURRENT_STAGE = process.env.STAGE || process.env.AWS_STAGE || 'dev';
-
 AWS.config.update({ region: 'us-east-1' });
+
+// 🔧 FUNCIÓN NUEVA: Extraer stage real desde el evento DynamoDB
+function extractStageFromEvent(record) {
+  // El stage está en el nombre de la tabla DynamoDB
+  // Ejemplo: "dev-t_cursos" -> "dev", "test-t_cursos" -> "test"
+  
+  // Opción 1: Desde eventSourceARN
+  if (record.eventSourceARN) {
+    const arnParts = record.eventSourceARN.split('/');
+    const tableName = arnParts[1]; // Formato: arn:aws:dynamodb:region:account:table/TABLE_NAME/stream/...
+    
+    if (tableName && tableName.includes('-t_cursos')) {
+      const stage = tableName.split('-t_cursos')[0];
+      console.log(`🎯 Stage extraído del ARN: ${stage}`);
+      return stage;
+    }
+  }
+  
+  // Opción 2: Desde el nombre de la función Lambda (fallback)
+  const functionName = process.env.AWS_LAMBDA_FUNCTION_NAME || '';
+  if (functionName.includes('-dev-')) return 'dev';
+  if (functionName.includes('-test-')) return 'test';
+  if (functionName.includes('-prod-')) return 'prod';
+  
+  // Opción 3: Desde variable de entorno (fallback)
+  const envStage = process.env.STAGE || process.env.AWS_STAGE;
+  if (envStage) {
+    console.log(`🎯 Stage desde variable de entorno: ${envStage}`);
+    return envStage;
+  }
+  
+  // Fallback final
+  console.warn('⚠️ No se pudo determinar el stage, usando "dev" por defecto');
+  return 'dev';
+}
 
 module.exports.handler = async (event) => {
   console.log('🔥 Stream event recibido:', JSON.stringify(event, null, 2));
-  console.log(`🎯 Procesando en stage: ${CURRENT_STAGE}`);
+  
+  // 🔧 CORRECCIÓN: Extraer stage del primer record (todos deberían ser del mismo stage)
+  const currentStage = event.Records.length > 0 ? extractStageFromEvent(event.Records[0]) : 'dev';
+  
+  console.log(`🎯 Procesando en stage: ${currentStage}`);
 
   const results = [];
 
   try {
-    // 🚀 OPTIMIZACIÓN: Procesar en paralelo para mejor performance
-    const processingPromises = event.Records.map(record => procesarRegistroStream(record));
+    // Procesar en paralelo para mejor performance
+    const processingPromises = event.Records.map(record => procesarRegistroStream(record, currentStage));
     const recordResults = await Promise.allSettled(processingPromises);
     
     recordResults.forEach((result, index) => {
@@ -61,12 +96,12 @@ module.exports.handler = async (event) => {
   }
 };
 
-async function procesarRegistroStream(record) {
+async function procesarRegistroStream(record, currentStage) {
   const { eventName, dynamodb } = record;
-  console.log(`📝 Procesando evento: ${eventName}`);
+  console.log(`📝 Procesando evento: ${eventName} en stage: ${currentStage}`);
 
   try {
-    // 🚀 OPTIMIZACIÓN: Conversión ultrarrápida con AWS SDK
+    // Conversión ultrarrápida con AWS SDK
     const imageToCheck = dynamodb.NewImage || dynamodb.OldImage;
     const curso = unmarshall(imageToCheck);
     const tenantId = curso.tenant_id;
@@ -79,33 +114,33 @@ async function procesarRegistroStream(record) {
         reason: 'tenant_not_configured', 
         tenant: tenantId,
         evento: eventName,
-        stage: CURRENT_STAGE
+        stage: currentStage
       };
     }
 
-    console.log(`✅ Procesando tenant autorizado: ${tenantId} - Evento: ${eventName} - Stage: ${CURRENT_STAGE}`);
+    console.log(`✅ Procesando tenant autorizado: ${tenantId} - Evento: ${eventName} - Stage: ${currentStage}`);
 
-    // 🚀 OPTIMIZACIÓN: Switch optimizado con async/await directo
+    // 🔧 CORRECCIÓN: Pasar el stage real a cada función
     switch (eventName) {
       case 'INSERT':
-        await manejarInsercion(dynamodb.NewImage);
+        await manejarInsercion(dynamodb.NewImage, currentStage);
         break;
       case 'MODIFY':
-        await manejarModificacion(dynamodb.NewImage, dynamodb.OldImage);
+        await manejarModificacion(dynamodb.NewImage, dynamodb.OldImage, currentStage);
         break;
       case 'REMOVE':
-        await manejarEliminacion(dynamodb.OldImage);
+        await manejarEliminacion(dynamodb.OldImage, currentStage);
         break;
       default:
         console.log(`⚠️ Evento no manejado: ${eventName}`);
-        return { status: 'ignored', reason: 'event_not_handled', evento: eventName, stage: CURRENT_STAGE };
+        return { status: 'ignored', reason: 'event_not_handled', evento: eventName, stage: currentStage };
     }
     
     return { 
       status: 'processed', 
       tenant: tenantId, 
       evento: eventName,
-      stage: CURRENT_STAGE
+      stage: currentStage
     };
     
   } catch (error) {
@@ -114,48 +149,46 @@ async function procesarRegistroStream(record) {
   }
 }
 
-async function manejarInsercion(newImage) {
-  console.log('➕ Manejando inserción de curso');
+async function manejarInsercion(newImage, currentStage) {
+  console.log(`➕ Manejando inserción de curso en stage: ${currentStage}`);
   
-  // 🚀 OPTIMIZACIÓN: Conversión directa con unmarshall
   const curso = unmarshall(newImage);
-  const documentoElasticsearch = prepararDocumentoParaElasticsearch(curso);
+  const documentoElasticsearch = prepararDocumentoParaElasticsearch(curso, currentStage);
   
   await indexarEnElasticsearch(
     curso.tenant_id,
     curso.curso_id,
     documentoElasticsearch,
-    'create'
+    'create',
+    currentStage
   );
 }
 
-async function manejarModificacion(newImage, oldImage) {
-  console.log('✏️ Manejando modificación de curso');
+async function manejarModificacion(newImage, oldImage, currentStage) {
+  console.log(`✏️ Manejando modificación de curso en stage: ${currentStage}`);
   
-  // 🚀 OPTIMIZACIÓN: Conversión directa con unmarshall
   const cursoNuevo = unmarshall(newImage);
-  const documentoElasticsearch = prepararDocumentoParaElasticsearch(cursoNuevo);
+  const documentoElasticsearch = prepararDocumentoParaElasticsearch(cursoNuevo, currentStage);
   
   await indexarEnElasticsearch(
     cursoNuevo.tenant_id,
     cursoNuevo.curso_id,
     documentoElasticsearch,
-    'index'
+    'index',
+    currentStage
   );
 }
 
-async function manejarEliminacion(oldImage) {
-  console.log('🗑️ Manejando eliminación de curso');
+async function manejarEliminacion(oldImage, currentStage) {
+  console.log(`🗑️ Manejando eliminación de curso en stage: ${currentStage}`);
   
-  // 🚀 OPTIMIZACIÓN: Conversión directa con unmarshall
   const curso = unmarshall(oldImage);
   
-  await eliminarDeElasticsearch(curso.tenant_id, curso.curso_id);
+  await eliminarDeElasticsearch(curso.tenant_id, curso.curso_id, currentStage);
 }
 
-// 🚀 FUNCIÓN OPTIMIZADA: Preparación ultrarrápida de documentos
-function prepararDocumentoParaElasticsearch(curso) {
-  // 🚀 OPTIMIZACIÓN: Desestructuración directa y valores por defecto
+// 🔧 FUNCIÓN MODIFICADA: Ahora recibe el stage como parámetro
+function prepararDocumentoParaElasticsearch(curso, currentStage) {
   const {
     tenant_id = '',
     curso_id = '',
@@ -177,7 +210,7 @@ function prepararDocumentoParaElasticsearch(curso) {
     fecha_modificacion = null
   } = curso_datos;
 
-  // 🚀 OPTIMIZACIÓN: Validación rápida de etiquetas
+  // Validación rápida de etiquetas
   const etiquetasLimpias = Array.isArray(etiquetas) 
     ? etiquetas.filter(tag => typeof tag === 'string' && tag.trim())
     : [];
@@ -197,13 +230,12 @@ function prepararDocumentoParaElasticsearch(curso) {
     estado,
     fecha_creacion,
     fecha_modificacion,
-    stage: CURRENT_STAGE,
-    // 🚀 OPTIMIZACIÓN: Join directo sin filtros innecesarios
+    stage: currentStage, // 🔧 USAR EL STAGE REAL
     contenido_busqueda: [nombre, descripcion, nivel, instructor, categoria, estado, ...etiquetasLimpias]
       .join(' ').toLowerCase()
   };
 
-  console.log('📄 Documento preparado para Elasticsearch:', JSON.stringify(documento, null, 2));
+  console.log(`📄 Documento preparado para Elasticsearch (${currentStage}):`, JSON.stringify(documento, null, 2));
   return documento;
 }
 
@@ -220,16 +252,16 @@ function obtenerElasticsearchURL(tenantId) {
   return baseURL;
 }
 
-async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 'index') {
+// 🔧 FUNCIÓN MODIFICADA: Ahora recibe el stage como parámetro
+async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 'index', currentStage) {
   const elasticsearchURL = obtenerElasticsearchURL(tenantId);
-  const indice = `cursos_${tenantId.toLowerCase()}_${CURRENT_STAGE}`;
+  const indice = `cursos_${tenantId.toLowerCase()}_${currentStage}`; // 🔧 USAR STAGE REAL
   const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
   
   console.log(`🔍 ${operacion.toUpperCase()} en Elasticsearch:`, url);
-  console.log(`📋 Índice con stage: ${indice}`);
+  console.log(`📋 Índice con stage correcto: ${indice}`);
   
   try {
-    // 🚀 OPTIMIZACIÓN: Crear índice y documento en paralelo cuando es posible
     await crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice);
     
     const response = await axios({
@@ -242,13 +274,13 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
       timeout: 10000
     });
     
-    console.log(`✅ Curso ${operacion}ado en Elasticsearch para ${tenantId} (${CURRENT_STAGE}):`, response.data);
+    console.log(`✅ Curso ${operacion}ado en Elasticsearch para ${tenantId} (${currentStage}):`, response.data);
     
   } catch (error) {
     console.error(`❌ Error al ${operacion} en Elasticsearch:`, {
       url,
       tenantId,
-      stage: CURRENT_STAGE,
+      stage: currentStage,
       indice,
       error: error.response?.data || error.message,
       status: error.response?.status
@@ -257,31 +289,32 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
   }
 }
 
-async function eliminarDeElasticsearch(tenantId, cursoId) {
+// 🔧 FUNCIÓN MODIFICADA: Ahora recibe el stage como parámetro
+async function eliminarDeElasticsearch(tenantId, cursoId, currentStage) {
   const elasticsearchURL = obtenerElasticsearchURL(tenantId);
-  const indice = `cursos_${tenantId.toLowerCase()}_${CURRENT_STAGE}`;
+  const indice = `cursos_${tenantId.toLowerCase()}_${currentStage}`; // 🔧 USAR STAGE REAL
   const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
   
   console.log(`🗑️ ELIMINANDO de Elasticsearch:`, url);
-  console.log(`📋 Índice con stage: ${indice}`);
+  console.log(`📋 Índice con stage correcto: ${indice}`);
   
   try {
     const response = await axios.delete(url, {
       timeout: 10000
     });
     
-    console.log(`✅ Curso eliminado de Elasticsearch para ${tenantId} (${CURRENT_STAGE}):`, response.data);
+    console.log(`✅ Curso eliminado de Elasticsearch para ${tenantId} (${currentStage}):`, response.data);
     
   } catch (error) {
     if (error.response?.status === 404) {
-      console.log(`⚠️ Documento no encontrado en Elasticsearch: ${cursoId} (${tenantId}, ${CURRENT_STAGE})`);
+      console.log(`⚠️ Documento no encontrado en Elasticsearch: ${cursoId} (${tenantId}, ${currentStage})`);
       return;
     }
     
     console.error(`❌ Error al eliminar de Elasticsearch:`, {
       url,
       tenantId,
-      stage: CURRENT_STAGE,
+      stage: currentStage,
       indice,
       error: error.response?.data || error.message,
       status: error.response?.status
@@ -290,11 +323,10 @@ async function eliminarDeElasticsearch(tenantId, cursoId) {
   }
 }
 
-// 🚀 OPTIMIZACIÓN: Cache de índices existentes para evitar verificaciones repetidas
+// Cache de índices existentes para evitar verificaciones repetidas
 const indicesExistentes = new Set();
 
 async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
-  // 🚀 OPTIMIZACIÓN: Cache en memoria para evitar llamadas repetidas
   if (indicesExistentes.has(indice)) {
     console.log(`📋 Índice ${indice} ya verificado en cache`);
     return;
@@ -305,7 +337,7 @@ async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
   try {
     await axios.head(url, { timeout: 5000 });
     console.log(`📋 Índice ${indice} ya existe`);
-    indicesExistentes.add(indice); // 🚀 Agregar a cache
+    indicesExistentes.add(indice);
     
   } catch (error) {
     if (error.response?.status === 404) {
@@ -362,7 +394,7 @@ async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
       });
       
       console.log(`✅ Índice ${indice} creado exitosamente`);
-      indicesExistentes.add(indice); // 🚀 Agregar a cache
+      indicesExistentes.add(indice);
     } else {
       throw error;
     }

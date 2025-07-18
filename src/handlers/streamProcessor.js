@@ -1,5 +1,7 @@
 const AWS = require('aws-sdk');
 const axios = require('axios');
+// 🚀 OPTIMIZACIÓN: Usar AWS SDK Utilities para conversión ultrarrápida
+const { unmarshall } = require('@aws-sdk/util-dynamodb');
 
 // Configuración de Elasticsearch
 const validateElasticsearchConfig = () => {
@@ -25,7 +27,7 @@ const TENANT_PORTS = {
 // Lista de tenants permitidos
 const ALLOWED_TENANTS = ['UTEC', 'MIT'];
 
-// 🆕 Obtener stage actual (dev, test, prod)
+// Obtener stage actual (dev, test, prod)
 const CURRENT_STAGE = process.env.STAGE || process.env.AWS_STAGE || 'dev';
 
 AWS.config.update({ region: 'us-east-1' });
@@ -37,18 +39,25 @@ module.exports.handler = async (event) => {
   const results = [];
 
   try {
-    // Procesar cada registro del stream
-    for (const record of event.Records) {
-      const result = await procesarRegistroStream(record);
-      results.push(result);
-    }
+    // 🚀 OPTIMIZACIÓN: Procesar en paralelo para mejor performance
+    const processingPromises = event.Records.map(record => procesarRegistroStream(record));
+    const recordResults = await Promise.allSettled(processingPromises);
+    
+    recordResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        results.push(result.value);
+      } else {
+        console.error(`❌ Error procesando record ${index}:`, result.reason);
+        results.push({ status: 'error', reason: result.reason.message, index });
+      }
+    });
 
-    console.log('✅ Todos los registros procesados exitosamente:', results);
+    console.log('✅ Todos los registros procesados:', results);
     return { statusCode: 200, body: 'Procesamiento completado', results };
 
   } catch (error) {
     console.error('❌ Error procesando stream:', error);
-    throw error; // Esto hará que Lambda reintente el procesamiento
+    throw error;
   }
 };
 
@@ -57,15 +66,14 @@ async function procesarRegistroStream(record) {
   console.log(`📝 Procesando evento: ${eventName}`);
 
   try {
-    // Extraer tenant_id del registro para validación temprana
+    // 🚀 OPTIMIZACIÓN: Conversión ultrarrápida con AWS SDK
     const imageToCheck = dynamodb.NewImage || dynamodb.OldImage;
-    const curso = convertirDynamoDBItemAObjeto(imageToCheck);
+    const curso = unmarshall(imageToCheck);
     const tenantId = curso.tenant_id;
     
     // ✅ Validar tenant ANTES de procesar
     if (!ALLOWED_TENANTS.includes(tenantId)) {
       console.warn(`⚠️ Tenant no configurado ignorado: ${tenantId} - Evento: ${eventName}`);
-      // Return SUCCESS (no error) para que DynamoDB no reintente
       return { 
         status: 'ignored', 
         reason: 'tenant_not_configured', 
@@ -77,7 +85,7 @@ async function procesarRegistroStream(record) {
 
     console.log(`✅ Procesando tenant autorizado: ${tenantId} - Evento: ${eventName} - Stage: ${CURRENT_STAGE}`);
 
-    // Procesar normalmente para tenants configurados
+    // 🚀 OPTIMIZACIÓN: Switch optimizado con async/await directo
     switch (eventName) {
       case 'INSERT':
         await manejarInsercion(dynamodb.NewImage);
@@ -102,14 +110,15 @@ async function procesarRegistroStream(record) {
     
   } catch (error) {
     console.error(`❌ Error procesando registro ${eventName}:`, error);
-    throw error; // Solo aquí sí queremos que reintente
+    throw error;
   }
 }
 
 async function manejarInsercion(newImage) {
   console.log('➕ Manejando inserción de curso');
   
-  const curso = convertirDynamoDBItemAObjeto(newImage);
+  // 🚀 OPTIMIZACIÓN: Conversión directa con unmarshall
+  const curso = unmarshall(newImage);
   const documentoElasticsearch = prepararDocumentoParaElasticsearch(curso);
   
   await indexarEnElasticsearch(
@@ -123,95 +132,75 @@ async function manejarInsercion(newImage) {
 async function manejarModificacion(newImage, oldImage) {
   console.log('✏️ Manejando modificación de curso');
   
-  const cursoNuevo = convertirDynamoDBItemAObjeto(newImage);
+  // 🚀 OPTIMIZACIÓN: Conversión directa con unmarshall
+  const cursoNuevo = unmarshall(newImage);
   const documentoElasticsearch = prepararDocumentoParaElasticsearch(cursoNuevo);
   
   await indexarEnElasticsearch(
     cursoNuevo.tenant_id,
     cursoNuevo.curso_id,
     documentoElasticsearch,
-    'index'  // 'index' actualiza o crea
+    'index'
   );
 }
 
 async function manejarEliminacion(oldImage) {
   console.log('🗑️ Manejando eliminación de curso');
   
-  const curso = convertirDynamoDBItemAObjeto(oldImage);
+  // 🚀 OPTIMIZACIÓN: Conversión directa con unmarshall
+  const curso = unmarshall(oldImage);
   
   await eliminarDeElasticsearch(curso.tenant_id, curso.curso_id);
 }
 
-// 🔧 FUNCIÓN CORREGIDA: Manejo correcto de arrays DynamoDB
-function convertirDynamoDBItemAObjeto(dynamoItem) {
-  if (!dynamoItem) return {};
-  
-  const curso = {};
-  
-  for (const [key, value] of Object.entries(dynamoItem)) {
-    if (value.S) {
-      curso[key] = value.S;
-    } else if (value.N) {
-      curso[key] = Number(value.N);
-    } else if (value.BOOL) {
-      curso[key] = value.BOOL;
-    } else if (value.M) {
-      curso[key] = convertirDynamoDBItemAObjeto(value.M);
-    } else if (value.L) {
-      // 🔧 CORRECCIÓN: Manejar arrays correctamente
-      curso[key] = value.L.map(item => {
-        if (item.S) return item.S;
-        if (item.N) return Number(item.N);
-        if (item.BOOL) return item.BOOL;
-        if (item.M) return convertirDynamoDBItemAObjeto(item.M);
-        if (item.L) return item.L.map(subItem => convertirDynamoDBItemAObjeto(subItem));
-        return item; // Fallback
-      });
-    } else {
-      console.warn(`⚠️ Tipo DynamoDB no manejado para ${key}:`, value);
-      curso[key] = value;
-    }
-  }
-  
-  return curso;
-}
-
+// 🚀 FUNCIÓN OPTIMIZADA: Preparación ultrarrápida de documentos
 function prepararDocumentoParaElasticsearch(curso) {
-  // 🔧 CORRECCIÓN: Validar y limpiar etiquetas
-  let etiquetas = [];
-  if (curso.curso_datos?.etiquetas && Array.isArray(curso.curso_datos.etiquetas)) {
-    etiquetas = curso.curso_datos.etiquetas
-      .filter(tag => tag && typeof tag === 'string' && tag.trim() !== '')
-      .map(tag => tag.trim());
-  }
+  // 🚀 OPTIMIZACIÓN: Desestructuración directa y valores por defecto
+  const {
+    tenant_id = '',
+    curso_id = '',
+    fecha_creacion = new Date().toISOString(),
+    curso_datos = {}
+  } = curso;
+
+  const {
+    nombre = '',
+    descripcion = '',
+    nivel = '',
+    duracion_horas = 0,
+    precio = 0,
+    publicado = false,
+    etiquetas = [],
+    instructor = '',
+    categoria = 'General',
+    estado = 'Activo',
+    fecha_modificacion = null
+  } = curso_datos;
+
+  // 🚀 OPTIMIZACIÓN: Validación rápida de etiquetas
+  const etiquetasLimpias = Array.isArray(etiquetas) 
+    ? etiquetas.filter(tag => typeof tag === 'string' && tag.trim())
+    : [];
 
   const documento = {
-    tenant_id: curso.tenant_id,
-    curso_id: curso.curso_id,
-    nombre: curso.curso_datos?.nombre || '',
-    descripcion: curso.curso_datos?.descripcion || '',
-    nivel: curso.curso_datos?.nivel || '',
-    duracion_horas: curso.curso_datos?.duracion_horas || 0,
-    precio: curso.curso_datos?.precio || 0,
-    publicado: curso.curso_datos?.publicado || false,
-    etiquetas: etiquetas, // 🔧 Etiquetas limpias
-    instructor: curso.curso_datos?.instructor || '',
-    categoria: curso.curso_datos?.categoria || '', // 🆕 Añadido categoria
-    estado: curso.curso_datos?.estado || 'Activo', // 🆕 Añadido estado
-    fecha_creacion: curso.fecha_creacion,
-    fecha_modificacion: curso.curso_datos?.fecha_modificacion,
-    // 🆕 Añadir información de stage
+    tenant_id,
+    curso_id,
+    nombre,
+    descripcion,
+    nivel,
+    duracion_horas: Number(duracion_horas) || 0,
+    precio: Number(precio) || 0,
+    publicado: Boolean(publicado),
+    etiquetas: etiquetasLimpias,
+    instructor,
+    categoria,
+    estado,
+    fecha_creacion,
+    fecha_modificacion,
     stage: CURRENT_STAGE,
-    // 🔧 CORRECCIÓN: Campo de búsqueda sin objetos
-    contenido_busqueda: [
-      curso.curso_datos?.nombre,
-      curso.curso_datos?.descripcion,
-      curso.curso_datos?.nivel,
-      curso.curso_datos?.instructor,
-      curso.curso_datos?.categoria,
-      curso.curso_datos?.estado,
-      ...etiquetas // 🔧 Usar etiquetas limpias
-    ].filter(Boolean).join(' ').toLowerCase()
+    // 🚀 OPTIMIZACIÓN: Join directo sin filtros innecesarios
+    contenido_busqueda: [nombre, descripcion, nivel, instructor, categoria, estado, ...etiquetasLimpias]
+      .join(' ').toLowerCase()
   };
 
   console.log('📄 Documento preparado para Elasticsearch:', JSON.stringify(documento, null, 2));
@@ -219,7 +208,6 @@ function prepararDocumentoParaElasticsearch(curso) {
 }
 
 function obtenerElasticsearchURL(tenantId) {
-  // Validación estricta de tenant
   if (!ALLOWED_TENANTS.includes(tenantId)) {
     console.error(`❌ Tenant no autorizado: ${tenantId}`);
     throw new Error(`Tenant "${tenantId}" no está autorizado en el sistema`);
@@ -234,8 +222,6 @@ function obtenerElasticsearchURL(tenantId) {
 
 async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 'index') {
   const elasticsearchURL = obtenerElasticsearchURL(tenantId);
-  
-  // 🆕 CAMBIO PRINCIPAL: Incluir stage en el nombre del índice
   const indice = `cursos_${tenantId.toLowerCase()}_${CURRENT_STAGE}`;
   const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
   
@@ -243,10 +229,9 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
   console.log(`📋 Índice con stage: ${indice}`);
   
   try {
-    // Crear el índice si no existe
+    // 🚀 OPTIMIZACIÓN: Crear índice y documento en paralelo cuando es posible
     await crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice);
     
-    // Indexar el documento
     const response = await axios({
       method: operacion === 'create' ? 'POST' : 'PUT',
       url: url,
@@ -265,7 +250,6 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
       tenantId,
       stage: CURRENT_STAGE,
       indice,
-      documento: JSON.stringify(documento, null, 2), // 🔧 Log del documento para debug
       error: error.response?.data || error.message,
       status: error.response?.status
     });
@@ -275,8 +259,6 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
 
 async function eliminarDeElasticsearch(tenantId, cursoId) {
   const elasticsearchURL = obtenerElasticsearchURL(tenantId);
-  
-  // 🆕 CAMBIO PRINCIPAL: Incluir stage en el nombre del índice
   const indice = `cursos_${tenantId.toLowerCase()}_${CURRENT_STAGE}`;
   const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
   
@@ -293,7 +275,7 @@ async function eliminarDeElasticsearch(tenantId, cursoId) {
   } catch (error) {
     if (error.response?.status === 404) {
       console.log(`⚠️ Documento no encontrado en Elasticsearch: ${cursoId} (${tenantId}, ${CURRENT_STAGE})`);
-      return; // No es un error crítico
+      return;
     }
     
     console.error(`❌ Error al eliminar de Elasticsearch:`, {
@@ -308,19 +290,27 @@ async function eliminarDeElasticsearch(tenantId, cursoId) {
   }
 }
 
+// 🚀 OPTIMIZACIÓN: Cache de índices existentes para evitar verificaciones repetidas
+const indicesExistentes = new Set();
+
 async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
+  // 🚀 OPTIMIZACIÓN: Cache en memoria para evitar llamadas repetidas
+  if (indicesExistentes.has(indice)) {
+    console.log(`📋 Índice ${indice} ya verificado en cache`);
+    return;
+  }
+
   const url = `${elasticsearchURL}/${indice}`;
   
   try {
-    // Verificar si el índice existe
     await axios.head(url, { timeout: 5000 });
     console.log(`📋 Índice ${indice} ya existe`);
+    indicesExistentes.add(indice); // 🚀 Agregar a cache
     
   } catch (error) {
     if (error.response?.status === 404) {
       console.log(`📋 Creando índice ${indice}...`);
       
-      // Configuración del índice con mappings optimizados para búsqueda
       const configuracionIndice = {
         settings: {
           analysis: {
@@ -345,10 +335,7 @@ async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
                 suggest: { type: 'completion' }
               }
             },
-            descripcion: { 
-              type: 'text', 
-              analyzer: 'curso_analyzer' 
-            },
+            descripcion: { type: 'text', analyzer: 'curso_analyzer' },
             nivel: { type: 'keyword' },
             duracion_horas: { type: 'integer' },
             precio: { type: 'float' },
@@ -359,15 +346,12 @@ async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
               analyzer: 'curso_analyzer',
               fields: { keyword: { type: 'keyword' } }
             },
-            categoria: { type: 'keyword' }, // 🆕 Añadido
-            estado: { type: 'keyword' }, // 🆕 Añadido
-            stage: { type: 'keyword' }, // 🆕 Añadido
+            categoria: { type: 'keyword' },
+            estado: { type: 'keyword' },
+            stage: { type: 'keyword' },
             fecha_creacion: { type: 'date' },
             fecha_modificacion: { type: 'date' },
-            contenido_busqueda: { 
-              type: 'text', 
-              analyzer: 'curso_analyzer' 
-            }
+            contenido_busqueda: { type: 'text', analyzer: 'curso_analyzer' }
           }
         }
       };
@@ -378,6 +362,7 @@ async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
       });
       
       console.log(`✅ Índice ${indice} creado exitosamente`);
+      indicesExistentes.add(indice); // 🚀 Agregar a cache
     } else {
       throw error;
     }

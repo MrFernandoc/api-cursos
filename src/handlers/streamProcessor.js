@@ -136,23 +136,50 @@ async function manejarEliminacion(oldImage) {
   await eliminarDeElasticsearch(curso.tenant_id, curso.curso_id);
 }
 
+// 🔧 FUNCIÓN CORREGIDA: Manejo correcto de arrays DynamoDB
 function convertirDynamoDBItemAObjeto(dynamoItem) {
-  // Convertir formato DynamoDB a objeto normal
+  if (!dynamoItem) return {};
+  
   const curso = {};
   
   for (const [key, value] of Object.entries(dynamoItem)) {
-    if (value.S) curso[key] = value.S;
-    else if (value.N) curso[key] = Number(value.N);
-    else if (value.M) curso[key] = convertirDynamoDBItemAObjeto(value.M);
-    else if (value.L) curso[key] = value.L.map(item => convertirDynamoDBItemAObjeto(item));
-    else if (value.BOOL) curso[key] = value.BOOL;
+    if (value.S) {
+      curso[key] = value.S;
+    } else if (value.N) {
+      curso[key] = Number(value.N);
+    } else if (value.BOOL) {
+      curso[key] = value.BOOL;
+    } else if (value.M) {
+      curso[key] = convertirDynamoDBItemAObjeto(value.M);
+    } else if (value.L) {
+      // 🔧 CORRECCIÓN: Manejar arrays correctamente
+      curso[key] = value.L.map(item => {
+        if (item.S) return item.S;
+        if (item.N) return Number(item.N);
+        if (item.BOOL) return item.BOOL;
+        if (item.M) return convertirDynamoDBItemAObjeto(item.M);
+        if (item.L) return item.L.map(subItem => convertirDynamoDBItemAObjeto(subItem));
+        return item; // Fallback
+      });
+    } else {
+      console.warn(`⚠️ Tipo DynamoDB no manejado para ${key}:`, value);
+      curso[key] = value;
+    }
   }
   
   return curso;
 }
 
 function prepararDocumentoParaElasticsearch(curso) {
-  return {
+  // 🔧 CORRECCIÓN: Validar y limpiar etiquetas
+  let etiquetas = [];
+  if (curso.curso_datos?.etiquetas && Array.isArray(curso.curso_datos.etiquetas)) {
+    etiquetas = curso.curso_datos.etiquetas
+      .filter(tag => tag && typeof tag === 'string' && tag.trim() !== '')
+      .map(tag => tag.trim());
+  }
+
+  const documento = {
     tenant_id: curso.tenant_id,
     curso_id: curso.curso_id,
     nombre: curso.curso_datos?.nombre || '',
@@ -161,19 +188,22 @@ function prepararDocumentoParaElasticsearch(curso) {
     duracion_horas: curso.curso_datos?.duracion_horas || 0,
     precio: curso.curso_datos?.precio || 0,
     publicado: curso.curso_datos?.publicado || false,
-    etiquetas: curso.curso_datos?.etiquetas || [],
+    etiquetas: etiquetas, // 🔧 Etiquetas limpias
     instructor: curso.curso_datos?.instructor || '',
     fecha_creacion: curso.fecha_creacion,
     fecha_modificacion: curso.curso_datos?.fecha_modificacion,
-    // Campo combinado para búsqueda fulltext
+    // 🔧 CORRECCIÓN: Campo de búsqueda sin objetos
     contenido_busqueda: [
       curso.curso_datos?.nombre,
       curso.curso_datos?.descripcion,
       curso.curso_datos?.nivel,
       curso.curso_datos?.instructor,
-      ...(curso.curso_datos?.etiquetas || [])
+      ...etiquetas // 🔧 Usar etiquetas limpias
     ].filter(Boolean).join(' ').toLowerCase()
   };
+
+  console.log('📄 Documento preparado para Elasticsearch:', JSON.stringify(documento, null, 2));
+  return documento;
 }
 
 function obtenerElasticsearchURL(tenantId) {
@@ -218,6 +248,7 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
     console.error(`❌ Error al ${operacion} en Elasticsearch:`, {
       url,
       tenantId,
+      documento: JSON.stringify(documento, null, 2), // 🔧 Log del documento para debug
       error: error.response?.data || error.message,
       status: error.response?.status
     });

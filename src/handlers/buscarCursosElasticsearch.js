@@ -26,11 +26,16 @@ const TENANT_PORTS = {
 // Lista de tenants permitidos
 const ALLOWED_TENANTS = ['UTEC', 'MIT'];
 
+// 🆕 Obtener stage actual (dev, test, prod)
+const CURRENT_STAGE = process.env.STAGE || process.env.AWS_STAGE || 'dev';
+
 module.exports.handler = async (event) => {
   try {
     const token = event.headers.Authorization;
     const payload = await validarTokenExternamente(token);
     const tenant_id = payload.tenant_id;
+
+    console.log(`🎯 Búsqueda en stage: ${CURRENT_STAGE} para tenant: ${tenant_id}`);
 
     // ✅ Validación estricta de tenant
     if (!ALLOWED_TENANTS.includes(tenant_id)) {
@@ -38,11 +43,12 @@ module.exports.handler = async (event) => {
       return createResponse(403, { 
         mensaje: `Tenant "${tenant_id}" no está autorizado en el sistema de búsqueda`,
         codigo: 'TENANT_NOT_CONFIGURED',
-        tenants_disponibles: ALLOWED_TENANTS
+        tenants_disponibles: ALLOWED_TENANTS,
+        stage: CURRENT_STAGE
       });
     }
 
-    console.log(`✅ Búsqueda autorizada para tenant: ${tenant_id}`);
+    console.log(`✅ Búsqueda autorizada para tenant: ${tenant_id} en stage: ${CURRENT_STAGE}`);
 
     const queryParams = event.queryStringParameters || {};
     const query = queryParams.q || '';
@@ -59,7 +65,8 @@ module.exports.handler = async (event) => {
     const limiteFinal = esAutocompletado ? Math.min(limit, 8) : limit; // Max 8 para autocompletado
     const timeoutMs = esAutocompletado ? 3000 : 10000; // 3s para autocompletado, 10s para otros
 
-    const indice = `cursos_${tenant_id.toLowerCase()}`;
+    // 🆕 CAMBIO PRINCIPAL: Incluir stage en el nombre del índice
+    const indice = `cursos_${tenant_id.toLowerCase()}_${CURRENT_STAGE}`;
     const resultados = await buscarEnElasticsearch(tenant_id, indice, query, tipo_busqueda, from, limiteFinal, timeoutMs);
 
     return createResponse(200, {
@@ -70,6 +77,8 @@ module.exports.handler = async (event) => {
       tipo_busqueda,
       tiempo_respuesta: resultados.took,
       tenant_usado: tenant_id,
+      stage: CURRENT_STAGE, // 🆕 Incluir stage en respuesta
+      indice_usado: indice, // 🆕 Incluir índice para debug
       // 🆕 Info adicional para frontend
       es_autocompletado: esAutocompletado,
       query_length: query.length,
@@ -87,7 +96,8 @@ module.exports.handler = async (event) => {
       return createResponse(200, { 
         total: 0, 
         cursos: [], 
-        mensaje: 'No se encontraron cursos para este tenant' 
+        mensaje: `No se encontraron cursos para este tenant en el ambiente ${CURRENT_STAGE}`,
+        stage: CURRENT_STAGE
       });
     }
     
@@ -114,6 +124,8 @@ function obtenerElasticsearchURL(tenantId) {
 async function buscarEnElasticsearch(tenantId, indice, query, tipoBusqueda, from, size, timeoutMs = 10000) {
   const elasticsearchURL = obtenerElasticsearchURL(tenantId);
   const url = `${elasticsearchURL}/${indice}/_search`;
+  
+  console.log(`🔍 Buscando en índice: ${indice} (${CURRENT_STAGE})`);
   
   let consultaElasticsearch;
   
@@ -165,11 +177,11 @@ async function buscarEnElasticsearch(tenantId, indice, query, tipoBusqueda, from
     ],
     // 🚀 OPTIMIZACIÓN: Solo campos necesarios para autocompletado
     _source: tipoBusqueda === 'autocomplete' ? 
-      ['curso_id', 'nombre', 'descripcion', 'nivel', 'precio', 'instructor', 'duracion_horas', 'etiquetas'] :
+      ['curso_id', 'nombre', 'descripcion', 'nivel', 'precio', 'instructor', 'duracion_horas', 'categoria', 'estado', 'stage'] :
       true
   };
 
-  console.log(`🔍 Consulta Elasticsearch para ${tenantId} (${tipoBusqueda}):`, JSON.stringify(payload, null, 2));
+  console.log(`🔍 Consulta Elasticsearch para ${tenantId} (${tipoBusqueda}) en ${CURRENT_STAGE}:`, JSON.stringify(payload, null, 2));
 
   try {
     const response = await axios.post(url, payload, {
@@ -185,7 +197,9 @@ async function buscarEnElasticsearch(tenantId, indice, query, tipoBusqueda, from
       duracion_horas: hit._source.duracion_horas,
       precio: hit._source.precio,
       instructor: hit._source.instructor,
-      etiquetas: hit._source.etiquetas,
+      categoria: hit._source.categoria, // 🆕 Incluir categoria
+      estado: hit._source.estado, // 🆕 Incluir estado
+      stage: hit._source.stage, // 🆕 Incluir stage
       publicado: hit._source.publicado,
       fecha_creacion: hit._source.fecha_creacion,
       score: hit._score,
@@ -205,6 +219,8 @@ async function buscarEnElasticsearch(tenantId, indice, query, tipoBusqueda, from
     console.error('Error consultando Elasticsearch:', {
       url,
       tenantId,
+      stage: CURRENT_STAGE,
+      indice,
       error: error.response?.data || error.message,
       status: error.response?.status,
       timeout: timeoutMs
@@ -237,11 +253,11 @@ function crearConsultaAutocompleteMejorado(query) {
             }
           }
         },
-        // 3. Match en etiquetas
+        // 3. Match en categoria
         {
           prefix: {
-            etiquetas: {
-              value: query.toLowerCase(),
+            categoria: {
+              value: query,
               boost: 6.0
             }
           }
@@ -268,7 +284,7 @@ function crearConsultaAutocompleteMejorado(query) {
         }
       ],
       filter: [
-        { term: { publicado: true } }
+        { term: { estado: 'Activo' } } // 🆕 Filtrar por estado activo
       ],
       minimum_should_match: 1
     }
@@ -293,7 +309,7 @@ function crearConsultaHibrida(query) {
         {
           multi_match: {
             query: query,
-            fields: ['nombre^5', 'descripcion^3', 'instructor^2', 'contenido_busqueda'],
+            fields: ['nombre^5', 'descripcion^3', 'instructor^2', 'categoria^2', 'contenido_busqueda'],
             type: 'best_fields',
             fuzziness: 'AUTO',
             boost: 8.0
@@ -330,7 +346,7 @@ function crearConsultaHibrida(query) {
         }
       ],
       filter: [
-        { term: { publicado: true } }
+        { term: { estado: 'Activo' } } // 🆕 Solo cursos activos
       ],
       minimum_should_match: 1
     }
@@ -342,12 +358,12 @@ function crearSnippetAutocompletado(source, query) {
   const queryLower = query.toLowerCase();
   
   // Priorizar nombre si contiene la query
-  if (source.nombre.toLowerCase().includes(queryLower)) {
-    return `${source.nombre} - ${source.instructor}`;
+  if (source.nombre && source.nombre.toLowerCase().includes(queryLower)) {
+    return `${source.nombre} - ${source.instructor} (${source.categoria})`;
   }
   
   // Luego descripción
-  if (source.descripcion.toLowerCase().includes(queryLower)) {
+  if (source.descripcion && source.descripcion.toLowerCase().includes(queryLower)) {
     const index = source.descripcion.toLowerCase().indexOf(queryLower);
     const start = Math.max(0, index - 20);
     const snippet = source.descripcion.substring(start, start + 60);
@@ -355,10 +371,10 @@ function crearSnippetAutocompletado(source, query) {
   }
   
   // Default
-  return `${source.nombre} - ${source.nivel} - ${source.instructor}`;
+  return `${source.nombre} - ${source.categoria} - ${source.instructor}`;
 }
 
-// FUNCIONES ORIGINALES (sin cambios)
+// FUNCIONES ORIGINALES (actualizadas)
 function crearConsultaFulltext(query) {
   return {
     bool: {
@@ -366,7 +382,7 @@ function crearConsultaFulltext(query) {
         {
           multi_match: {
             query: query,
-            fields: ['nombre^3', 'descripcion^2', 'instructor^2', 'contenido_busqueda'],
+            fields: ['nombre^3', 'descripcion^2', 'instructor^2', 'categoria^2', 'contenido_busqueda'],
             type: 'best_fields',
             fuzziness: 'AUTO'
           }
@@ -378,7 +394,7 @@ function crearConsultaFulltext(query) {
         }
       ],
       filter: [
-        { term: { publicado: true } }
+        { term: { estado: 'Activo' } } // 🆕 Solo cursos activos
       ]
     }
   };
@@ -414,7 +430,7 @@ function crearConsultaFuzzy(query) {
         }
       ],
       filter: [
-        { term: { publicado: true } }
+        { term: { estado: 'Activo' } } // 🆕 Solo cursos activos
       ]
     }
   };
@@ -433,10 +449,15 @@ function crearConsultaPrefix(query) {
           prefix: {
             contenido_busqueda: query.toLowerCase()
           }
+        },
+        {
+          prefix: {
+            categoria: query
+          }
         }
       ],
       filter: [
-        { term: { publicado: true } }
+        { term: { estado: 'Activo' } } // 🆕 Solo cursos activos
       ]
     }
   };
@@ -465,7 +486,7 @@ function crearConsultaAutocomplete(query) {
         }
       ],
       filter: [
-        { term: { publicado: true } }
+        { term: { estado: 'Activo' } } // 🆕 Solo cursos activos
       ]
     }
   };

@@ -25,10 +25,14 @@ const TENANT_PORTS = {
 // Lista de tenants permitidos
 const ALLOWED_TENANTS = ['UTEC', 'MIT'];
 
+// 🆕 Obtener stage actual (dev, test, prod)
+const CURRENT_STAGE = process.env.STAGE || process.env.AWS_STAGE || 'dev';
+
 AWS.config.update({ region: 'us-east-1' });
 
 module.exports.handler = async (event) => {
   console.log('🔥 Stream event recibido:', JSON.stringify(event, null, 2));
+  console.log(`🎯 Procesando en stage: ${CURRENT_STAGE}`);
 
   const results = [];
 
@@ -66,11 +70,12 @@ async function procesarRegistroStream(record) {
         status: 'ignored', 
         reason: 'tenant_not_configured', 
         tenant: tenantId,
-        evento: eventName
+        evento: eventName,
+        stage: CURRENT_STAGE
       };
     }
 
-    console.log(`✅ Procesando tenant autorizado: ${tenantId} - Evento: ${eventName}`);
+    console.log(`✅ Procesando tenant autorizado: ${tenantId} - Evento: ${eventName} - Stage: ${CURRENT_STAGE}`);
 
     // Procesar normalmente para tenants configurados
     switch (eventName) {
@@ -85,13 +90,14 @@ async function procesarRegistroStream(record) {
         break;
       default:
         console.log(`⚠️ Evento no manejado: ${eventName}`);
-        return { status: 'ignored', reason: 'event_not_handled', evento: eventName };
+        return { status: 'ignored', reason: 'event_not_handled', evento: eventName, stage: CURRENT_STAGE };
     }
     
     return { 
       status: 'processed', 
       tenant: tenantId, 
-      evento: eventName 
+      evento: eventName,
+      stage: CURRENT_STAGE
     };
     
   } catch (error) {
@@ -190,14 +196,20 @@ function prepararDocumentoParaElasticsearch(curso) {
     publicado: curso.curso_datos?.publicado || false,
     etiquetas: etiquetas, // 🔧 Etiquetas limpias
     instructor: curso.curso_datos?.instructor || '',
+    categoria: curso.curso_datos?.categoria || '', // 🆕 Añadido categoria
+    estado: curso.curso_datos?.estado || 'Activo', // 🆕 Añadido estado
     fecha_creacion: curso.fecha_creacion,
     fecha_modificacion: curso.curso_datos?.fecha_modificacion,
+    // 🆕 Añadir información de stage
+    stage: CURRENT_STAGE,
     // 🔧 CORRECCIÓN: Campo de búsqueda sin objetos
     contenido_busqueda: [
       curso.curso_datos?.nombre,
       curso.curso_datos?.descripcion,
       curso.curso_datos?.nivel,
       curso.curso_datos?.instructor,
+      curso.curso_datos?.categoria,
+      curso.curso_datos?.estado,
       ...etiquetas // 🔧 Usar etiquetas limpias
     ].filter(Boolean).join(' ').toLowerCase()
   };
@@ -222,10 +234,13 @@ function obtenerElasticsearchURL(tenantId) {
 
 async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 'index') {
   const elasticsearchURL = obtenerElasticsearchURL(tenantId);
-  const indice = `cursos_${tenantId.toLowerCase()}`;
+  
+  // 🆕 CAMBIO PRINCIPAL: Incluir stage en el nombre del índice
+  const indice = `cursos_${tenantId.toLowerCase()}_${CURRENT_STAGE}`;
   const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
   
   console.log(`🔍 ${operacion.toUpperCase()} en Elasticsearch:`, url);
+  console.log(`📋 Índice con stage: ${indice}`);
   
   try {
     // Crear el índice si no existe
@@ -242,12 +257,14 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
       timeout: 10000
     });
     
-    console.log(`✅ Curso ${operacion}ado en Elasticsearch para ${tenantId}:`, response.data);
+    console.log(`✅ Curso ${operacion}ado en Elasticsearch para ${tenantId} (${CURRENT_STAGE}):`, response.data);
     
   } catch (error) {
     console.error(`❌ Error al ${operacion} en Elasticsearch:`, {
       url,
       tenantId,
+      stage: CURRENT_STAGE,
+      indice,
       documento: JSON.stringify(documento, null, 2), // 🔧 Log del documento para debug
       error: error.response?.data || error.message,
       status: error.response?.status
@@ -258,27 +275,32 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
 
 async function eliminarDeElasticsearch(tenantId, cursoId) {
   const elasticsearchURL = obtenerElasticsearchURL(tenantId);
-  const indice = `cursos_${tenantId.toLowerCase()}`;
+  
+  // 🆕 CAMBIO PRINCIPAL: Incluir stage en el nombre del índice
+  const indice = `cursos_${tenantId.toLowerCase()}_${CURRENT_STAGE}`;
   const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
   
   console.log(`🗑️ ELIMINANDO de Elasticsearch:`, url);
+  console.log(`📋 Índice con stage: ${indice}`);
   
   try {
     const response = await axios.delete(url, {
       timeout: 10000
     });
     
-    console.log(`✅ Curso eliminado de Elasticsearch para ${tenantId}:`, response.data);
+    console.log(`✅ Curso eliminado de Elasticsearch para ${tenantId} (${CURRENT_STAGE}):`, response.data);
     
   } catch (error) {
     if (error.response?.status === 404) {
-      console.log(`⚠️ Documento no encontrado en Elasticsearch: ${cursoId} (${tenantId})`);
+      console.log(`⚠️ Documento no encontrado en Elasticsearch: ${cursoId} (${tenantId}, ${CURRENT_STAGE})`);
       return; // No es un error crítico
     }
     
     console.error(`❌ Error al eliminar de Elasticsearch:`, {
       url,
       tenantId,
+      stage: CURRENT_STAGE,
+      indice,
       error: error.response?.data || error.message,
       status: error.response?.status
     });
@@ -337,6 +359,9 @@ async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
               analyzer: 'curso_analyzer',
               fields: { keyword: { type: 'keyword' } }
             },
+            categoria: { type: 'keyword' }, // 🆕 Añadido
+            estado: { type: 'keyword' }, // 🆕 Añadido
+            stage: { type: 'keyword' }, // 🆕 Añadido
             fecha_creacion: { type: 'date' },
             fecha_modificacion: { type: 'date' },
             contenido_busqueda: { 

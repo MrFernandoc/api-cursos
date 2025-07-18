@@ -1,22 +1,46 @@
 const AWS = require('aws-sdk');
 const axios = require('axios');
 
-// IP de tu OpenSearch
-const ELASTICSEARCH_ENDPOINT = process.env.ELASTICSEARCH_ENDPOINT || 'http://35.172.134.128:9200';
+// Configuración de Elasticsearch
+const validateElasticsearchConfig = () => {
+  const baseURL = process.env.ELASTICSEARCH_ENDPOINT;
+  
+  if (!baseURL) {
+    console.error('❌ ELASTICSEARCH_ENDPOINT not configured');
+    throw new Error('Missing required environment variable: ELASTICSEARCH_ENDPOINT');
+  }
+  
+  console.log('✅ Elasticsearch configured:', baseURL);
+  return baseURL;
+};
+
+const ELASTICSEARCH_BASE_URL = validateElasticsearchConfig();
+
+// Mapeo de tenant_id reales a puertos específicos
+const TENANT_PORTS = {
+  'UTEC': '9201',
+  'MIT': '9202'
+};
+
+// Lista de tenants permitidos
+const ALLOWED_TENANTS = ['UTEC', 'MIT'];
 
 AWS.config.update({ region: 'us-east-1' });
 
 module.exports.handler = async (event) => {
   console.log('🔥 Stream event recibido:', JSON.stringify(event, null, 2));
 
+  const results = [];
+
   try {
     // Procesar cada registro del stream
     for (const record of event.Records) {
-      await procesarRegistroStream(record);
+      const result = await procesarRegistroStream(record);
+      results.push(result);
     }
 
-    console.log('✅ Todos los registros procesados exitosamente');
-    return { statusCode: 200, body: 'Procesamiento completado' };
+    console.log('✅ Todos los registros procesados exitosamente:', results);
+    return { statusCode: 200, body: 'Procesamiento completado', results };
 
   } catch (error) {
     console.error('❌ Error procesando stream:', error);
@@ -29,6 +53,26 @@ async function procesarRegistroStream(record) {
   console.log(`📝 Procesando evento: ${eventName}`);
 
   try {
+    // Extraer tenant_id del registro para validación temprana
+    const imageToCheck = dynamodb.NewImage || dynamodb.OldImage;
+    const curso = convertirDynamoDBItemAObjeto(imageToCheck);
+    const tenantId = curso.tenant_id;
+    
+    // ✅ Validar tenant ANTES de procesar
+    if (!ALLOWED_TENANTS.includes(tenantId)) {
+      console.warn(`⚠️ Tenant no configurado ignorado: ${tenantId} - Evento: ${eventName}`);
+      // Return SUCCESS (no error) para que DynamoDB no reintente
+      return { 
+        status: 'ignored', 
+        reason: 'tenant_not_configured', 
+        tenant: tenantId,
+        evento: eventName
+      };
+    }
+
+    console.log(`✅ Procesando tenant autorizado: ${tenantId} - Evento: ${eventName}`);
+
+    // Procesar normalmente para tenants configurados
     switch (eventName) {
       case 'INSERT':
         await manejarInsercion(dynamodb.NewImage);
@@ -41,10 +85,18 @@ async function procesarRegistroStream(record) {
         break;
       default:
         console.log(`⚠️ Evento no manejado: ${eventName}`);
+        return { status: 'ignored', reason: 'event_not_handled', evento: eventName };
     }
+    
+    return { 
+      status: 'processed', 
+      tenant: tenantId, 
+      evento: eventName 
+    };
+    
   } catch (error) {
     console.error(`❌ Error procesando registro ${eventName}:`, error);
-    throw error;
+    throw error; // Solo aquí sí queremos que reintente
   }
 }
 
@@ -124,15 +176,30 @@ function prepararDocumentoParaElasticsearch(curso) {
   };
 }
 
-async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 'index') {
-  const indice = `cursos_${tenantId}`.toLowerCase();
-  const url = `${ELASTICSEARCH_ENDPOINT}/${indice}/_doc/${cursoId}`;
+function obtenerElasticsearchURL(tenantId) {
+  // Validación estricta de tenant
+  if (!ALLOWED_TENANTS.includes(tenantId)) {
+    console.error(`❌ Tenant no autorizado: ${tenantId}`);
+    throw new Error(`Tenant "${tenantId}" no está autorizado en el sistema`);
+  }
   
-  console.log(`🔍 ${operacion.toUpperCase()} en OpenSearch:`, url);
+  const puerto = TENANT_PORTS[tenantId];
+  const baseURL = `${ELASTICSEARCH_BASE_URL}:${puerto}`;
+  
+  console.log(`✅ URL Elasticsearch para ${tenantId}: ${baseURL}`);
+  return baseURL;
+}
+
+async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 'index') {
+  const elasticsearchURL = obtenerElasticsearchURL(tenantId);
+  const indice = `cursos_${tenantId.toLowerCase()}`;
+  const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
+  
+  console.log(`🔍 ${operacion.toUpperCase()} en Elasticsearch:`, url);
   
   try {
     // Crear el índice si no existe
-    await crearIndiceElasticsearchSiNoExiste(indice);
+    await crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice);
     
     // Indexar el documento
     const response = await axios({
@@ -145,11 +212,12 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
       timeout: 10000
     });
     
-    console.log(`✅ Curso ${operacion}ado en OpenSearch:`, response.data);
+    console.log(`✅ Curso ${operacion}ado en Elasticsearch para ${tenantId}:`, response.data);
     
   } catch (error) {
-    console.error(`❌ Error al ${operacion} en OpenSearch:`, {
+    console.error(`❌ Error al ${operacion} en Elasticsearch:`, {
       url,
+      tenantId,
       error: error.response?.data || error.message,
       status: error.response?.status
     });
@@ -158,26 +226,28 @@ async function indexarEnElasticsearch(tenantId, cursoId, documento, operacion = 
 }
 
 async function eliminarDeElasticsearch(tenantId, cursoId) {
-  const indice = `cursos_${tenantId}`.toLowerCase();
-  const url = `${ELASTICSEARCH_ENDPOINT}/${indice}/_doc/${cursoId}`;
+  const elasticsearchURL = obtenerElasticsearchURL(tenantId);
+  const indice = `cursos_${tenantId.toLowerCase()}`;
+  const url = `${elasticsearchURL}/${indice}/_doc/${cursoId}`;
   
-  console.log(`🗑️ ELIMINANDO de OpenSearch:`, url);
+  console.log(`🗑️ ELIMINANDO de Elasticsearch:`, url);
   
   try {
     const response = await axios.delete(url, {
       timeout: 10000
     });
     
-    console.log(`✅ Curso eliminado de OpenSearch:`, response.data);
+    console.log(`✅ Curso eliminado de Elasticsearch para ${tenantId}:`, response.data);
     
   } catch (error) {
     if (error.response?.status === 404) {
-      console.log(`⚠️ Documento no encontrado en OpenSearch: ${cursoId}`);
+      console.log(`⚠️ Documento no encontrado en Elasticsearch: ${cursoId} (${tenantId})`);
       return; // No es un error crítico
     }
     
-    console.error(`❌ Error al eliminar de OpenSearch:`, {
+    console.error(`❌ Error al eliminar de Elasticsearch:`, {
       url,
+      tenantId,
       error: error.response?.data || error.message,
       status: error.response?.status
     });
@@ -185,8 +255,8 @@ async function eliminarDeElasticsearch(tenantId, cursoId) {
   }
 }
 
-async function crearIndiceElasticsearchSiNoExiste(indice) {
-  const url = `${ELASTICSEARCH_ENDPOINT}/${indice}`;
+async function crearIndiceElasticsearchSiNoExiste(elasticsearchURL, indice) {
+  const url = `${elasticsearchURL}/${indice}`;
   
   try {
     // Verificar si el índice existe

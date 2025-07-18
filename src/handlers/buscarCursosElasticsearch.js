@@ -2,13 +2,47 @@ const axios = require('axios');
 const { validarTokenExternamente } = require('../middlewares/authMiddleware');
 const { createResponse } = require('../utils/response');
 
-const ELASTICSEARCH_ENDPOINT = process.env.ELASTICSEARCH_ENDPOINT || 'http://35.172.134.128:9200';
+// Configuración de Elasticsearch
+const validateElasticsearchConfig = () => {
+  const baseURL = process.env.ELASTICSEARCH_ENDPOINT;
+  
+  if (!baseURL) {
+    console.error('❌ ELASTICSEARCH_ENDPOINT not configured');
+    throw new Error('Missing required environment variable: ELASTICSEARCH_ENDPOINT');
+  }
+  
+  console.log('✅ Elasticsearch configured:', baseURL);
+  return baseURL;
+};
+
+const ELASTICSEARCH_BASE_URL = validateElasticsearchConfig();
+
+// Mapeo de tenant_id reales a puertos específicos
+const TENANT_PORTS = {
+  'UTEC': '9201',
+  'MIT': '9202'
+};
+
+// Lista de tenants permitidos
+const ALLOWED_TENANTS = ['UTEC', 'MIT'];
 
 module.exports.handler = async (event) => {
   try {
     const token = event.headers.Authorization;
     const payload = await validarTokenExternamente(token);
     const tenant_id = payload.tenant_id;
+
+    // ✅ Validación estricta de tenant
+    if (!ALLOWED_TENANTS.includes(tenant_id)) {
+      console.error(`❌ Tenant no autorizado en búsqueda: ${tenant_id}`);
+      return createResponse(403, { 
+        mensaje: `Tenant "${tenant_id}" no está autorizado en el sistema de búsqueda`,
+        codigo: 'TENANT_NOT_CONFIGURED',
+        tenants_disponibles: ALLOWED_TENANTS
+      });
+    }
+
+    console.log(`✅ Búsqueda autorizada para tenant: ${tenant_id}`);
 
     const queryParams = event.queryStringParameters || {};
     const query = queryParams.q || '';
@@ -25,8 +59,8 @@ module.exports.handler = async (event) => {
     const limiteFinal = esAutocompletado ? Math.min(limit, 8) : limit; // Max 8 para autocompletado
     const timeoutMs = esAutocompletado ? 3000 : 10000; // 3s para autocompletado, 10s para otros
 
-    const indice = `cursos_${tenant_id}`.toLowerCase();
-    const resultados = await buscarEnElasticsearch(indice, query, tipo_busqueda, from, limiteFinal, timeoutMs);
+    const indice = `cursos_${tenant_id.toLowerCase()}`;
+    const resultados = await buscarEnElasticsearch(tenant_id, indice, query, tipo_busqueda, from, limiteFinal, timeoutMs);
 
     return createResponse(200, {
       total: resultados.total,
@@ -35,6 +69,7 @@ module.exports.handler = async (event) => {
       limite: limiteFinal,
       tipo_busqueda,
       tiempo_respuesta: resultados.took,
+      tenant_usado: tenant_id,
       // 🆕 Info adicional para frontend
       es_autocompletado: esAutocompletado,
       query_length: query.length,
@@ -60,9 +95,25 @@ module.exports.handler = async (event) => {
   }
 };
 
-// 🚀 FUNCIÓN MEJORADA: Con timeout configurable
-async function buscarEnElasticsearch(indice, query, tipoBusqueda, from, size, timeoutMs = 10000) {
-  const url = `${ELASTICSEARCH_ENDPOINT}/${indice}/_search`;
+// ✅ FUNCIÓN: Obtener URL de Elasticsearch específica por tenant con validación
+function obtenerElasticsearchURL(tenantId) {
+  // Validación estricta de tenant
+  if (!ALLOWED_TENANTS.includes(tenantId)) {
+    console.error(`❌ Tenant no autorizado: ${tenantId}`);
+    throw new Error(`Tenant "${tenantId}" no está autorizado en el sistema`);
+  }
+  
+  const puerto = TENANT_PORTS[tenantId];
+  const baseURL = `${ELASTICSEARCH_BASE_URL}:${puerto}`;
+  
+  console.log(`✅ URL Elasticsearch para ${tenantId}: ${baseURL}`);
+  return baseURL;
+}
+
+// 🚀 FUNCIÓN MEJORADA: Con timeout configurable y enrutamiento por tenant
+async function buscarEnElasticsearch(tenantId, indice, query, tipoBusqueda, from, size, timeoutMs = 10000) {
+  const elasticsearchURL = obtenerElasticsearchURL(tenantId);
+  const url = `${elasticsearchURL}/${indice}/_search`;
   
   let consultaElasticsearch;
   
@@ -118,7 +169,7 @@ async function buscarEnElasticsearch(indice, query, tipoBusqueda, from, size, ti
       true
   };
 
-  console.log(`🔍 Consulta OpenSearch (${tipoBusqueda}):`, JSON.stringify(payload, null, 2));
+  console.log(`🔍 Consulta Elasticsearch para ${tenantId} (${tipoBusqueda}):`, JSON.stringify(payload, null, 2));
 
   try {
     const response = await axios.post(url, payload, {
@@ -151,8 +202,9 @@ async function buscarEnElasticsearch(indice, query, tipoBusqueda, from, size, ti
     };
 
   } catch (error) {
-    console.error('Error consultando OpenSearch:', {
+    console.error('Error consultando Elasticsearch:', {
       url,
+      tenantId,
       error: error.response?.data || error.message,
       status: error.response?.status,
       timeout: timeoutMs

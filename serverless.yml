@@ -12,6 +12,7 @@ provider:
 
   environment:
     TABLE_NAME: ${sls:stage}-t_cursos
+    ELASTICSEARCH_ENDPOINT: http://44.211.131.243
 
 functions:
   crearCurso:
@@ -72,8 +73,6 @@ functions:
             Fn::GetAtt: [TablaCursos, StreamArn]
           batchSize: 10
           startingPosition: LATEST
-    environment:
-      ELASTICSEARCH_ENDPOINT: http://35.172.134.128:9200
 
   # 🔍 Función de búsqueda avanzada
   buscarCursosElasticsearch:
@@ -83,8 +82,6 @@ functions:
           path: cursos/buscar-avanzado
           method: get
           cors: true
-    environment:
-      ELASTICSEARCH_ENDPOINT: http://35.172.134.128:9200
 
 resources:
   Resources:

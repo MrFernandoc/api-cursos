@@ -14,22 +14,31 @@ module.exports.handler = async (event) => {
     const query = queryParams.q || '';
     const limit = parseInt(queryParams.limit) || 10;
     const from = parseInt(queryParams.from) || 0;
-    const tipo_busqueda = queryParams.tipo || 'fulltext'; // fulltext, fuzzy, prefix, autocomplete
+    const tipo_busqueda = queryParams.tipo || 'fulltext';
 
     if (!query) {
       return createResponse(400, { mensaje: 'Parámetro de búsqueda "q" es requerido' });
     }
 
+    // 🚀 OPTIMIZACIÓN: Para autocompletado, usar límites más pequeños y timeout reducido
+    const esAutocompletado = tipo_busqueda === 'autocomplete';
+    const limiteFinal = esAutocompletado ? Math.min(limit, 8) : limit; // Max 8 para autocompletado
+    const timeoutMs = esAutocompletado ? 3000 : 10000; // 3s para autocompletado, 10s para otros
+
     const indice = `cursos_${tenant_id}`.toLowerCase();
-    const resultados = await buscarEnElasticsearch(indice, query, tipo_busqueda, from, limit);
+    const resultados = await buscarEnElasticsearch(indice, query, tipo_busqueda, from, limiteFinal, timeoutMs);
 
     return createResponse(200, {
       total: resultados.total,
       cursos: resultados.hits,
       desde: from,
-      limite: limit,
+      limite: limiteFinal,
       tipo_busqueda,
-      tiempo_respuesta: resultados.took
+      tiempo_respuesta: resultados.took,
+      // 🆕 Info adicional para frontend
+      es_autocompletado: esAutocompletado,
+      query_length: query.length,
+      suggestion_ready: query.length >= 2 // Frontend puede usar esto
     });
 
   } catch (error) {
@@ -51,7 +60,8 @@ module.exports.handler = async (event) => {
   }
 };
 
-async function buscarEnElasticsearch(indice, query, tipoBusqueda, from, size) {
+// 🚀 FUNCIÓN MEJORADA: Con timeout configurable
+async function buscarEnElasticsearch(indice, query, tipoBusqueda, from, size, timeoutMs = 10000) {
   const url = `${ELASTICSEARCH_ENDPOINT}/${indice}/_search`;
   
   let consultaElasticsearch;
@@ -64,7 +74,10 @@ async function buscarEnElasticsearch(indice, query, tipoBusqueda, from, size) {
       consultaElasticsearch = crearConsultaPrefix(query);
       break;
     case 'autocomplete':
-      consultaElasticsearch = crearConsultaAutocomplete(query);
+      consultaElasticsearch = crearConsultaAutocompleteMejorado(query); // 🆕 Versión optimizada
+      break;
+    case 'hibrida': // 🆕 NUEVA OPCIÓN
+      consultaElasticsearch = crearConsultaHibrida(query);
       break;
     case 'fulltext':
     default:
@@ -78,54 +91,222 @@ async function buscarEnElasticsearch(indice, query, tipoBusqueda, from, size) {
     query: consultaElasticsearch,
     highlight: {
       fields: {
-        'nombre': {},
-        'descripcion': {},
-        'contenido_busqueda': {}
+        'nombre': {
+          pre_tags: ['<mark>'],
+          post_tags: ['</mark>'],
+          fragment_size: 150
+        },
+        'descripcion': {
+          pre_tags: ['<mark>'],
+          post_tags: ['</mark>'],
+          fragment_size: 200
+        },
+        'contenido_busqueda': {
+          pre_tags: ['<mark>'],
+          post_tags: ['</mark>'],
+          fragment_size: 100
+        }
       }
     },
     sort: [
       { '_score': { 'order': 'desc' } },
       { 'fecha_creacion': { 'order': 'desc' } }
-    ]
+    ],
+    // 🚀 OPTIMIZACIÓN: Solo campos necesarios para autocompletado
+    _source: tipoBusqueda === 'autocomplete' ? 
+      ['curso_id', 'nombre', 'descripcion', 'nivel', 'precio', 'instructor', 'duracion_horas', 'etiquetas'] :
+      true
   };
 
-  console.log('🔍 Consulta OpenSearch:', JSON.stringify(payload, null, 2));
+  console.log(`🔍 Consulta OpenSearch (${tipoBusqueda}):`, JSON.stringify(payload, null, 2));
 
   try {
     const response = await axios.post(url, payload, {
       headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
+      timeout: timeoutMs
     });
+
+    const hits = response.data.hits.hits.map(hit => ({
+      curso_id: hit._source.curso_id,
+      nombre: hit._source.nombre,
+      descripcion: hit._source.descripcion,
+      nivel: hit._source.nivel,
+      duracion_horas: hit._source.duracion_horas,
+      precio: hit._source.precio,
+      instructor: hit._source.instructor,
+      etiquetas: hit._source.etiquetas,
+      publicado: hit._source.publicado,
+      fecha_creacion: hit._source.fecha_creacion,
+      score: hit._score,
+      highlight: hit.highlight,
+      // 🆕 Para autocompletado, agregar snippet optimizado
+      snippet: tipoBusqueda === 'autocomplete' ? 
+        crearSnippetAutocompletado(hit._source, query) : null
+    }));
 
     return {
       total: response.data.hits.total.value || response.data.hits.total,
       took: response.data.took,
-      hits: response.data.hits.hits.map(hit => ({
-        curso_id: hit._source.curso_id,
-        nombre: hit._source.nombre,
-        descripcion: hit._source.descripcion,
-        nivel: hit._source.nivel,
-        duracion_horas: hit._source.duracion_horas,
-        precio: hit._source.precio,
-        instructor: hit._source.instructor,
-        etiquetas: hit._source.etiquetas,
-        publicado: hit._source.publicado,
-        fecha_creacion: hit._source.fecha_creacion,
-        score: hit._score,
-        highlight: hit.highlight
-      }))
+      hits
     };
 
   } catch (error) {
     console.error('Error consultando OpenSearch:', {
       url,
       error: error.response?.data || error.message,
-      status: error.response?.status
+      status: error.response?.status,
+      timeout: timeoutMs
     });
     throw error;
   }
 }
 
+// 🆕 AUTOCOMPLETADO MEJORADO: Más rápido y relevante
+function crearConsultaAutocompleteMejorado(query) {
+  return {
+    bool: {
+      should: [
+        // 1. Match exacto en nombre (máxima prioridad)
+        {
+          match_phrase_prefix: {
+            nombre: {
+              query: query,
+              boost: 10.0,
+              max_expansions: 5 // Reducido para velocidad
+            }
+          }
+        },
+        // 2. Prefijo en nombre.keyword
+        {
+          prefix: {
+            'nombre.keyword': {
+              value: query,
+              boost: 8.0
+            }
+          }
+        },
+        // 3. Match en etiquetas
+        {
+          prefix: {
+            etiquetas: {
+              value: query.toLowerCase(),
+              boost: 6.0
+            }
+          }
+        },
+        // 4. Match en instructor
+        {
+          match_phrase_prefix: {
+            instructor: {
+              query: query,
+              boost: 4.0,
+              max_expansions: 3
+            }
+          }
+        },
+        // 5. Fallback general
+        {
+          match_phrase_prefix: {
+            contenido_busqueda: {
+              query: query,
+              boost: 2.0,
+              max_expansions: 8
+            }
+          }
+        }
+      ],
+      filter: [
+        { term: { publicado: true } }
+      ],
+      minimum_should_match: 1
+    }
+  };
+}
+
+// 🆕 BÚSQUEDA HÍBRIDA: Combina múltiples algoritmos
+function crearConsultaHibrida(query) {
+  return {
+    bool: {
+      should: [
+        // Exacto
+        {
+          match_phrase: {
+            nombre: {
+              query: query,
+              boost: 15.0
+            }
+          }
+        },
+        // Fulltext
+        {
+          multi_match: {
+            query: query,
+            fields: ['nombre^5', 'descripcion^3', 'instructor^2', 'contenido_busqueda'],
+            type: 'best_fields',
+            fuzziness: 'AUTO',
+            boost: 8.0
+          }
+        },
+        // Prefijo
+        {
+          prefix: {
+            'nombre.keyword': {
+              value: query,
+              boost: 6.0
+            }
+          }
+        },
+        // Fuzzy
+        {
+          fuzzy: {
+            nombre: {
+              value: query,
+              fuzziness: 1,
+              boost: 4.0
+            }
+          }
+        },
+        // Autocompletado
+        {
+          match_phrase_prefix: {
+            nombre: {
+              query: query,
+              max_expansions: 10,
+              boost: 5.0
+            }
+          }
+        }
+      ],
+      filter: [
+        { term: { publicado: true } }
+      ],
+      minimum_should_match: 1
+    }
+  };
+}
+
+// 🆕 FUNCIÓN: Crear snippet para autocompletado
+function crearSnippetAutocompletado(source, query) {
+  const queryLower = query.toLowerCase();
+  
+  // Priorizar nombre si contiene la query
+  if (source.nombre.toLowerCase().includes(queryLower)) {
+    return `${source.nombre} - ${source.instructor}`;
+  }
+  
+  // Luego descripción
+  if (source.descripcion.toLowerCase().includes(queryLower)) {
+    const index = source.descripcion.toLowerCase().indexOf(queryLower);
+    const start = Math.max(0, index - 20);
+    const snippet = source.descripcion.substring(start, start + 60);
+    return `${source.nombre} - ...${snippet}...`;
+  }
+  
+  // Default
+  return `${source.nombre} - ${source.nivel} - ${source.instructor}`;
+}
+
+// FUNCIONES ORIGINALES (sin cambios)
 function crearConsultaFulltext(query) {
   return {
     bool: {
@@ -209,6 +390,7 @@ function crearConsultaPrefix(query) {
   };
 }
 
+// 🔄 FUNCIÓN ORIGINAL DE AUTOCOMPLETADO (mantenida para compatibilidad)
 function crearConsultaAutocomplete(query) {
   return {
     bool: {

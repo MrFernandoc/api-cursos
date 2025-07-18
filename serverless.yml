@@ -12,7 +12,7 @@ provider:
 
   environment:
     TABLE_NAME: ${sls:stage}-t_cursos
-    ELASTICSEARCH_ENDPOINT: http://44.211.131.243
+    ELASTICSEARCH_ENDPOINT: http://34.234.114.28
 
 functions:
   crearCurso:
